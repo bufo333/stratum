@@ -1,62 +1,158 @@
-# Agent Project Scaffold
+# trmnlapp
 
-A reusable, local-first agent workflow for new software projects. Copy this
-scaffold into a repository before beginning work.
+A read-only, btop-style terminal UI for monitoring NTP/chrony timing statistics
+and gpsd GPS/satellite telemetry on up to three LAN servers over SSH.
 
-On a new project, the coordinator detects the missing engineering contract and
-runs the governance questionnaire. After you approve the exact document hashes,
-the bootstrapper creates the initial local governance commit. Normal planning and
-implementation begin only after that baseline exists.
+## Features
 
-## Included
+- Collects NTP/chrony statistics (`chronyc tracking`, `chronyc sources -v`; falls
+  back to `ntpq -p` when chronyc is absent) via SSH remote commands.
+- Collects gpsd telemetry via an SSH local port-forward to the remote gpsd TCP
+  port (2947), then speaks the gpsd JSON protocol over that forward.
+- In-memory ring-buffer history per server per metric (600 samples, ~10 minutes
+  at 1 Hz; no data is persisted across restarts).
+- Combined color-coded multi-server graphs (NTP offset, frequency).
+- Per-server detail panels (NTP fields, GPS fix/position/satellites).
+- Summary table across all servers.
+- Stays responsive when a server is unreachable: exponential backoff reconnect,
+  per-server status indicator.
 
-- `AGENTS.md`: shared project instructions.
-- `docs/`: the portable workflow and first-run governance questionnaire.
-- `.opencode/`: OpenCode roles and `/workflow` command.
-- `.claude/`: matching Claude role adapters.
-- `.ai/plans/`: ignored mutable and approved plan handoffs, created on demand.
+## Supported Targets
 
-## Start With OpenCode
+| Target | Status |
+| --- | --- |
+| `aarch64-apple-darwin` (macOS arm64) | Primary development target |
+| `x86_64-unknown-linux-gnu` | Supported |
 
-From the project root, start an interactive OpenCode session:
+Windows and browser/mobile targets are not supported.
+
+## Prerequisites
+
+### Build Requirements
+
+- **Rust stable** (edition 2021; tested with Rust 1.98+).
+  Install from <https://rustup.rs>.
+
+### Runtime Requirements
+
+- **System `ssh` client** (`openssh` crate wraps the system binary).
+  - macOS: `ssh` ships with the OS.
+  - Linux: install `openssh-client` (Debian/Ubuntu) or `openssh-clients` (RHEL/Fedora).
+- **`chronyc`** (or `ntpq`) accessible on each monitored server.
+- **`gpsd`** running on each monitored server, listening on TCP port 2947
+  (default). The user's SSH account must be able to reach `127.0.0.1:2947` on
+  each server.
+- SSH key-based (passwordless) authentication configured for each server. The
+  `openssh` crate uses your `~/.ssh/config` and `~/.ssh/known_hosts` natively.
+
+## Build
 
 ```sh
-opencode
+# Development build
+cargo build
+
+# Release build (recommended for actual use)
+cargo build --release
 ```
 
-The configured default agent is `coordinator`. Start work with:
+The compiled binary is at `target/release/trmnlapp`.
 
-```text
-/workflow <requested change>
-```
-
-For a project without `docs/engineering-contract.md`, the coordinator asks the
-governance-bootstrap questionnaire before allowing planning or implementation.
-Answer the questions, review the generated document hashes, and explicitly
-approve them before the bootstrapper makes the local baseline commit.
-
-## Start With Claude Code
-
-From the project root, start Claude Code:
+### Cross-compilation
 
 ```sh
-claude --agent coordinator
+# macOS arm64 (on macOS)
+cargo build --release --target aarch64-apple-darwin
+
+# Linux x86_64 (requires the target toolchain)
+rustup target add x86_64-unknown-linux-gnu
+cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
-Then ask it to start the shared workflow, for example:
+## Usage
 
-```text
-Start the shared workflow for: <requested change>
+```sh
+trmnlapp <SERVER> [SERVER2] [SERVER3]
 ```
 
-`CLAUDE.md` directs Claude Code to `AGENTS.md`; the matching role adapters in
-`.claude/agents/` use the same governance bootstrap and approved-plan workflow.
+Pass one to three server hostnames or IP addresses as positional arguments.
+The order determines the stable color assignment (Cyan, Yellow, Magenta).
 
-## Before Use
+```sh
+# Monitor one server
+trmnlapp ntp1.lan
 
-1. Initialize Git if the project is not already a repository.
-2. Replace generic scaffold files only through the approved bootstrap flow.
-3. Restart OpenCode after changing `opencode.json` or files under `.opencode/`.
+# Monitor three servers
+trmnlapp ntp1.lan ntp2.lan ntp3.lan
 
-The scaffold prohibits agents from remote Git operations. Pushes, pulls, fetches,
-remote changes, and GitHub operations remain user-owned.
+# With explicit user
+trmnlapp user@ntp1.lan
+```
+
+### Keyboard Shortcuts
+
+| Key | Action |
+| --- | --- |
+| `q` | Quit |
+| `Ctrl-C` | Quit |
+
+## Display Layout
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Server Summary Table (Host / Status / Offset / ...)    │
+├────────────────────────┬────────────────────────────────┤
+│  NTP Offset Graph      │  NTP Frequency Graph           │
+│  (all servers, color)  │  (all servers, color)          │
+├────────┬───────────────┴───────┬────────────────────────┤
+│ Server1│ Server2               │ Server3                 │
+│ panel  │ panel                 │ panel                   │
+└────────┴───────────────────────┴────────────────────────┘
+```
+
+All displayed metrics are read-only. The application never modifies servers.
+
+## SSH / Security Notes
+
+This application uses your system `ssh` client and `~/.ssh/` configuration.
+
+### TOFU (Trust On First Use) — Security Disclosure
+
+**When connecting to a server that is not yet in your `~/.ssh/known_hosts`, the
+system `ssh` client applies TOFU: it accepts the host's public key and records
+it in `known_hosts`.  This automatic first-acceptance means the application
+could unknowingly connect to an impersonating host (including a
+man-in-the-middle attacker) on a first connection.**
+
+Mitigation steps:
+1. Verify the host key fingerprint out-of-band before the first connection.
+2. Use `ssh-keyscan -H <hostname>` to pre-populate `known_hosts` after manual
+   verification.
+3. Alternatively, run `ssh <hostname>` manually first in an interactive terminal
+   where you can confirm the fingerprint before using trmnlapp.
+
+**Changed host key:** if a server's host key changes after the initial
+connection, trmnlapp treats this as a hard error and will not connect. It will
+not silently accept or overwrite the existing `known_hosts` entry.
+
+### Privacy
+
+- Private key material is never copied, stored, or logged.
+- No monitoring data is persisted to disk across restarts.
+- The only permitted persistent write is recording a genuinely new host key in
+  `~/.ssh/known_hosts` via the system `ssh` client.
+
+## Open / Provisional Settings
+
+These defaults are provisional and isolated to single constants for easy change:
+
+| Setting | Default | File |
+| --- | --- | --- |
+| Ring-buffer capacity | 600 samples | `src/model/ring_buffer.rs` (`CAPACITY`) |
+| Refresh interval | 1 000 ms | `src/ingest/mod.rs` (poll loop) |
+| Backoff min / max | 1 s / 30 s | `src/ingest/mod.rs` (`BACKOFF_MIN`, `BACKOFF_MAX`) |
+| Repaint interval | 250 ms | `src/app.rs` (`REPAINT_INTERVAL`) |
+| Server color palette | Cyan / Yellow / Magenta | `src/render/mod.rs` (`server_color`) |
+
+## License
+
+MIT OR Apache-2.0

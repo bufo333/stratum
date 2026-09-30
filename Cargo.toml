@@ -1,0 +1,21 @@
+[package]
+name = "trmnlapp"
+version = "0.1.0"
+edition = "2021"
+description = "A read-only btop-style TUI that monitors NTP/chrony and gpsd over SSH"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "trmnlapp"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "sync", "time", "process"] }
+ratatui = { version = "0.30", features = ["default"] }
+crossterm = "0.29"
+clap = { version = "4.6", features = ["derive"] }
+openssh = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "2.0"
