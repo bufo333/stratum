@@ -3,7 +3,7 @@ name = "trmnlapp"
 version = "0.1.0"
 edition = "2021"
 description = "A read-only btop-style TUI that monitors NTP/chrony and gpsd over SSH"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "trmnlapp"

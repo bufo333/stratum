@@ -1,166 +1,70 @@
-# trmnlapp
+# stratum
 
-A read-only, btop-style terminal UI for monitoring NTP/chrony timing statistics
-and gpsd GPS/satellite telemetry on up to three LAN servers over SSH.
+Real-time NTP/GPS timing monitor for chrony+gpsd clusters
+
+stratum is a read-only Rust TUI application that monitors 1–6 LAN NTP/GPS
+servers simultaneously over SSH. It displays color-coded offset and frequency
+graphs, per-server detail panels, a summary table across all servers, and a
+polar satellite sky plot — with no agent or daemon installed on the monitored
+servers.
+
+> **Note on first connection:** stratum uses TOFU (Trust On First Use) for SSH
+> host-key verification. On first connection to a new server the host key is
+> accepted and stored in your `~/.ssh/known_hosts`. This carries the usual TOFU
+> MITM risk; verify fingerprints out-of-band if your threat model requires it.
 
 ## Features
 
-- Collects NTP/chrony statistics (`chronyc tracking`, `chronyc sources -v`; falls
-  back to `ntpq -p` when chronyc is absent) via SSH remote commands.
-- Collects gpsd telemetry via an SSH local port-forward to the remote gpsd TCP
-  port (2947), then speaks the gpsd JSON protocol over that forward.
-- In-memory ring-buffer history per server per metric (600 samples, ~10 minutes
-  at 1 Hz; no data is persisted across restarts).
-- Combined color-coded multi-server graphs (NTP offset, frequency).
-- Per-server detail panels (NTP fields, GPS fix/position/satellites).
+- Monitors 1–6 servers simultaneously.
+- Combined color-coded graphs (one line per server per metric) with axis scales.
+- Per-server detail panels.
 - Summary table across all servers.
-- Stays responsive when a server is unreachable: exponential backoff reconnect,
-  per-server status indicator.
+- Polar satellite sky plot.
+- SSH-based collection — no agent installed on the monitored servers.
+- Supports chrony and `ntpq`.
+- gpsd satellite data collected via SSH port-forward.
+- Read-only — never configures or mutates devices/servers.
+- Runs on Linux x86_64 and macOS arm64.
 
-## Supported Targets
+## Screenshots
 
-| Target | Status |
-| --- | --- |
-| `aarch64-apple-darwin` (macOS arm64) | Primary development target |
-| `x86_64-unknown-linux-gnu` | Supported |
-
-Windows and browser/mobile targets are not supported.
+*(Add screenshots here — run `trmnlapp pi@ntp1 pi@ntp2 pi@ntp3` for a minute then screenshot)*
 
 ## Prerequisites
 
-### Build Requirements
+- Rust stable toolchain.
+- SSH access to target servers running chrony/`ntpq` plus gpsd.
+- Servers reachable via the user's `~/.ssh/` config (keys, `known_hosts`).
 
-- **Rust stable** (edition 2021; tested with Rust 1.98+).
-  Install from <https://rustup.rs>.
-
-### Runtime Requirements
-
-- **System `ssh` client** (`openssh` crate wraps the system binary).
-  - macOS: `ssh` ships with the OS.
-  - Linux: install `openssh-client` (Debian/Ubuntu) or `openssh-clients` (RHEL/Fedora).
-- **`chronyc`** (or `ntpq`) accessible on each monitored server.
-- **`gpsd`** running on each monitored server, listening on TCP port 2947
-  (default). The user's SSH account must be able to reach `127.0.0.1:2947` on
-  each server.
-- SSH key-based (passwordless) authentication configured for each server. The
-  `openssh` crate uses your `~/.ssh/config` and `~/.ssh/known_hosts` natively.
-
-## Build
+## Installation
 
 ```sh
-# Development build
-cargo build
-
-# Release build (recommended for actual use)
 cargo build --release
 ```
 
-The compiled binary is at `target/release/trmnlapp`.
-
-### Cross-compilation
-
-```sh
-# macOS arm64 (on macOS)
-cargo build --release --target aarch64-apple-darwin
-
-# Linux x86_64 (requires the target toolchain)
-rustup target add x86_64-unknown-linux-gnu
-cargo build --release --target x86_64-unknown-linux-gnu
-```
+Binary: `target/release/trmnlapp`
 
 ## Usage
 
+```
+trmnlapp [OPTIONS] <USER@HOST>...
+```
+
+Pass 1–6 servers as `user@host` (or bare `host`, which uses `$USER` and your
+SSH config).
+
+**Single server:**
+
 ```sh
-trmnlapp <USER@HOST> [USER@HOST2] [USER@HOST3]
+trmnlapp pi@ntp1
 ```
 
-Pass one to three servers as positional arguments, each in `user@host` or
-`host` form.  The order determines the stable color assignment (Cyan, Yellow,
-Magenta).
+**Three servers:**
 
 ```sh
-# Monitor one server (user resolved from SSH config or $USER)
-trmnlapp ntp1.lan
-
-# Monitor three servers with explicit usernames
-trmnlapp alice@ntp1.lan alice@ntp2.lan alice@ntp3.lan
+trmnlapp pi@ntp1 pi@ntp2 pi@ntp3
 ```
-
-If all servers share the same login, you can omit the username and let your SSH
-config supply it via a `User` directive in `~/.ssh/config`:
-
-```
-Host ntp*.lan
-    User alice
-```
-
-Then `trmnlapp ntp1.lan ntp2.lan ntp3.lan` picks up `alice` automatically.
-
-### Keyboard Shortcuts
-
-| Key | Action |
-| --- | --- |
-| `q` | Quit |
-| `Ctrl-C` | Quit |
-
-## Display Layout
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  Server Summary Table (Host / Status / Offset / ...)    │
-├────────────────────────┬────────────────────────────────┤
-│  NTP Offset Graph      │  NTP Frequency Graph           │
-│  (all servers, color)  │  (all servers, color)          │
-├────────┬───────────────┴───────┬────────────────────────┤
-│ Server1│ Server2               │ Server3                 │
-│ panel  │ panel                 │ panel                   │
-└────────┴───────────────────────┴────────────────────────┘
-```
-
-All displayed metrics are read-only. The application never modifies servers.
-
-## SSH / Security Notes
-
-This application uses your system `ssh` client and `~/.ssh/` configuration.
-
-### TOFU (Trust On First Use) — Security Disclosure
-
-**When connecting to a server that is not yet in your `~/.ssh/known_hosts`, the
-system `ssh` client applies TOFU: it accepts the host's public key and records
-it in `known_hosts`.  This automatic first-acceptance means the application
-could unknowingly connect to an impersonating host (including a
-man-in-the-middle attacker) on a first connection.**
-
-Mitigation steps:
-1. Verify the host key fingerprint out-of-band before the first connection.
-2. Use `ssh-keyscan -H <hostname>` to pre-populate `known_hosts` after manual
-   verification.
-3. Alternatively, run `ssh <hostname>` manually first in an interactive terminal
-   where you can confirm the fingerprint before using trmnlapp.
-
-**Changed host key:** if a server's host key changes after the initial
-connection, trmnlapp treats this as a hard error and will not connect. It will
-not silently accept or overwrite the existing `known_hosts` entry.
-
-### Privacy
-
-- Private key material is never copied, stored, or logged.
-- No monitoring data is persisted to disk across restarts.
-- The only permitted persistent write is recording a genuinely new host key in
-  `~/.ssh/known_hosts` via the system `ssh` client.
-
-## Open / Provisional Settings
-
-These defaults are provisional and isolated to single constants for easy change:
-
-| Setting | Default | File |
-| --- | --- | --- |
-| Ring-buffer capacity | 600 samples | `src/model/ring_buffer.rs` (`CAPACITY`) |
-| Refresh interval | 1 000 ms | `src/ingest/mod.rs` (poll loop) |
-| Backoff min / max | 1 s / 30 s | `src/ingest/mod.rs` (`BACKOFF_MIN`, `BACKOFF_MAX`) |
-| Repaint interval | 250 ms | `src/app.rs` (`REPAINT_INTERVAL`) |
-| Server color palette | Cyan / Yellow / Magenta | `src/render/mod.rs` (`server_color`) |
 
 ## License
 
-MIT OR Apache-2.0
+GPL-3.0-or-later. See [LICENSE](LICENSE).
