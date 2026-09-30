@@ -195,7 +195,7 @@ Do not invent policy for them.
 | 6 | Exact macOS architecture and minimum macOS version | User via coordinator |
 | 7 | SSH library/executable selection and connection management details | Planner in approved plan |
 | 8 | Optional horizon/sky-view satellite display | User product decision |
-| 9 | Exact gpsd and chrony telemetry field inventory, units, and mappings | Planner verifies against source during planning |
+| 9 | Exact gpsd and chrony telemetry field inventory, units, and mappings | **Resolved** — live-verified against pi@ntp1/ntp2/ntp3; all fields populated in production. |
 | 10 | Refresh frequency, reconnect/backoff behavior, stale-data handling | User via coordinator |
 | 11 | Test coverage thresholds, platform test matrix, CI configuration | User via coordinator |
 | 12 | Documentation/versioning/changelog/release conventions | User via coordinator |
