@@ -28,7 +28,7 @@ servers.
 
 ## Screenshots
 
-*(Add screenshots here — run `trmnlapp pi@ntp1 pi@ntp2 pi@ntp3` for a minute then screenshot)*
+![stratum demo](screenshots/stratum-demo.png)
 
 ## Prerequisites
 
