@@ -44,6 +44,8 @@ const MIN_DIST: f64 = 0.12;
 const NUDGE_STEP: f64 = 0.08;
 /// Maximum nudge iterations per satellite before giving up (bounds the loop).
 const MAX_NUDGES: usize = 12;
+/// Guard against division by zero when two satellite dots are exactly coincident.
+const NUDGE_EPSILON: f64 = 1e-9;
 
 /// Convert polar sky coordinates to canvas (x, y).
 ///
@@ -148,21 +150,43 @@ fn clamp_to_horizon(x: f64, y: f64) -> (f64, f64) {
 /// `positions` are dot centres in canvas coordinates, in a stable order (the
 /// caller passes them in `BTreeMap` key order).  Returns the same number of
 /// positions; the first is never moved.  Each later position that lands within
-/// `MIN_DIST` of an already-placed one is shifted `+NUDGE_STEP` in x (up to
-/// `MAX_NUDGES` times) until it clears every placed point or the step budget
-/// is exhausted, then clamped to the horizon.
+/// `MIN_DIST` of an already-placed one is nudged `NUDGE_STEP` along the unit
+/// vector pointing away from the nearest colliding neighbor (up to `MAX_NUDGES`
+/// times) until it clears every placed point or the step budget is exhausted,
+/// then clamped to the horizon.  When the nearest neighbor is closer than
+/// `NUDGE_EPSILON` (exactly coincident), the direction is undefined and a fixed
+/// `+x` step is applied instead.
 fn spread_positions(positions: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let mut placed: Vec<(f64, f64)> = Vec::with_capacity(positions.len());
     for &(px, py) in positions {
-        let (mut x, y) = (px, py);
+        let (mut x, mut y) = (px, py);
         for _ in 0..MAX_NUDGES {
-            let collides = placed
+            // find nearest already-placed colliding neighbor
+            let nearest = placed
                 .iter()
-                .any(|&(qx, qy)| ((x - qx) * (x - qx) + (y - qy) * (y - qy)).sqrt() < MIN_DIST);
-            if !collides {
+                .filter(|&&(qx, qy)| {
+                    let dx = x - qx;
+                    let dy = y - qy;
+                    (dx * dx + dy * dy).sqrt() < MIN_DIST
+                })
+                .min_by(|&&(ax, ay), &&(bx, by)| {
+                    let da = (x - ax) * (x - ax) + (y - ay) * (y - ay);
+                    let db = (x - bx) * (x - bx) + (y - by) * (y - by);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            if let Some(&(qx, qy)) = nearest {
+                let dx = x - qx;
+                let dy = y - qy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < NUDGE_EPSILON {
+                    x += NUDGE_STEP; // coincident fallback
+                } else {
+                    x += (dx / dist) * NUDGE_STEP;
+                    y += (dy / dist) * NUDGE_STEP;
+                }
+            } else {
                 break;
             }
-            x += NUDGE_STEP;
         }
         let (x, y) = clamp_to_horizon(x, y);
         placed.push((x, y));
@@ -539,6 +563,22 @@ mod tests {
                 "non-deterministic: {a:?} vs {b:?}"
             );
         }
+    }
+
+    #[test]
+    fn spread_separates_vertically_coincident() {
+        // Two points close on the y-axis — x-only nudge would fail to separate them
+        let positions = vec![(0.0_f64, 0.0_f64), (0.0_f64, 0.1_f64)];
+        let result = spread_positions(&positions);
+        assert_eq!(result[0], positions[0]); // first never moves
+        let (x0, y0) = result[0];
+        let (x1, y1) = result[1];
+        let dist = ((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)).sqrt();
+        let eps = 1e-9_f64;
+        assert!(
+            dist >= MIN_DIST - eps,
+            "vertically close satellites not separated: dist={dist}"
+        );
     }
 
     #[test]
