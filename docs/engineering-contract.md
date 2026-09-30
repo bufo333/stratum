@@ -173,6 +173,10 @@ Scaffold rules (from `docs/agent-workflow.md`) apply:
 - Application delivery uses a temporary approved implementation branch; at most
   one in flight; plan is immutable once approved; review targets the exact
   committed revision; integration is fast-forward followed by branch deletion.
+- **One branch at a time:** Only one implementation branch may be open
+  concurrently. A `branch-bootstrap` agent must not create a new branch until
+  the previous feature branch has been integrated (fast-forwarded) into `main`.
+  Stacking unmerged branches is prohibited.
 - Explicit Git permission prompts are required.
 - All remote operations are user-owned. Agents never push, fetch, pull, alter
   remotes, or use GitHub.

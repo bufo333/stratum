@@ -49,6 +49,10 @@ draft, pasted conversation text, or summary is never an implementation handoff.
 2. The coordinator presents its SHA-256. The user approves or requests a new draft.
 3. A fresh planner freezes the verified draft under `.ai/plans/approved/`.
 4. A fresh branch-bootstrap agent creates the approved branch from the exact base.
+   **Pre-condition:** Verify there is no open implementation branch (i.e.,
+   `main` is the only local branch, or all feature branches have been merged
+   into `main`). If an open feature branch exists, stop and report — do not
+   create a new branch.
 5. A fresh implementer verifies the snapshot, branch, and base before editing,
    then runs the project-specific gate and commits.
 6. A fresh reviewer verifies the same snapshot and reviews the exact commit.
