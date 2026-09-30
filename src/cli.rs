@@ -2,12 +2,12 @@ use clap::Parser;
 
 /// trmnlapp — read-only NTP/chrony + gpsd monitor over SSH.
 ///
-/// Pass 1–3 server hostnames or IP addresses as positional arguments.
+/// Pass 1–3 servers as `user@host` or `host` (uses your SSH config / $USER if no user specified).
 #[derive(Debug, Parser)]
 #[command(name = "trmnlapp", version, about)]
 pub struct Cli {
-    /// Servers to monitor (1–3 hostnames or IP addresses).
-    #[arg(required = true, num_args = 1..=3, value_name = "SERVER")]
+    /// Server to monitor, e.g. alice@ntp1.lan or ntp1.lan
+    #[arg(required = true, num_args = 1..=3, value_name = "USER@HOST")]
     pub servers: Vec<String>,
 }
 

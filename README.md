@@ -71,22 +71,30 @@ cargo build --release --target x86_64-unknown-linux-gnu
 ## Usage
 
 ```sh
-trmnlapp <SERVER> [SERVER2] [SERVER3]
+trmnlapp <USER@HOST> [USER@HOST2] [USER@HOST3]
 ```
 
-Pass one to three server hostnames or IP addresses as positional arguments.
-The order determines the stable color assignment (Cyan, Yellow, Magenta).
+Pass one to three servers as positional arguments, each in `user@host` or
+`host` form.  The order determines the stable color assignment (Cyan, Yellow,
+Magenta).
 
 ```sh
-# Monitor one server
+# Monitor one server (user resolved from SSH config or $USER)
 trmnlapp ntp1.lan
 
-# Monitor three servers
-trmnlapp ntp1.lan ntp2.lan ntp3.lan
-
-# With explicit user
-trmnlapp user@ntp1.lan
+# Monitor three servers with explicit usernames
+trmnlapp alice@ntp1.lan alice@ntp2.lan alice@ntp3.lan
 ```
+
+If all servers share the same login, you can omit the username and let your SSH
+config supply it via a `User` directive in `~/.ssh/config`:
+
+```
+Host ntp*.lan
+    User alice
+```
+
+Then `trmnlapp ntp1.lan ntp2.lan ntp3.lan` picks up `alice` automatically.
 
 ### Keyboard Shortcuts
 
