@@ -3,7 +3,7 @@
 ## 1. Problem and Scope
 
 trmnlapp is a read-only TUI monitoring application in the style of btop. It
-monitors up to three LAN servers, each running chrony and gpsd. The user
+monitors up to six LAN servers, each running chrony and gpsd. The user
 specifies servers as CLI positional arguments.
 
 **Confirmed in scope:**
@@ -94,8 +94,8 @@ into a dedicated `src/app.rs` module.
 
 ## 5. Correctness and Reliability
 
-- Servers are identified by their positional CLI argument order. Up to three
-  servers accepted; zero or more than three is a usage error.
+- Servers are identified by their positional CLI argument order. Up to six
+  servers accepted; zero or more than six is a usage error.
 - Servers receive stable distinct colors in the display. Exact palette and
   accessibility/color policy are open questions.
 - In-memory per-server history via fixed-capacity ring buffers. No persistence
@@ -109,7 +109,7 @@ presentation. Measurable performance/reliability expectations.
 
 ## 6. SSH, Privacy, and Security
 
-The application collects diagnostics from the three LAN servers over SSH
+The application collects diagnostics from the LAN servers over SSH
 (preferred transport).
 
 **Rules:**
@@ -134,7 +134,7 @@ command selection and invocation.
 
 ## 7. External Services and Data Sources
 
-- All three LAN servers run chrony and gpsd.
+- All LAN servers run chrony and gpsd.
 - Collection is over SSH (preferred). No protocol field, endpoint path, command
   availability, exact version, or schema is asserted as verified until confirmed
   against actual server output during planning.
@@ -190,7 +190,7 @@ Do not invent policy for them.
 | 1 | PPS device support — future extension point | User via coordinator |
 | 2 | TimeClick serial/USB — potential future extension | User via coordinator |
 | 3 | Exact NTP/chrony query mechanism (subprocess vs. direct protocol vs. SSH remote command) | User via coordinator; planner verifies |
-| 4 | Server color palette and accessibility/color policy | User via coordinator |
+| 4 | Server color palette and accessibility/color policy | **Palette resolved** — six-server palette: 0 Cyan, 1 Yellow, 2 Magenta, 3 Green, 4 Red, 5 Blue, wrapping at 6 (`index % 6`). Broader accessibility/color-blind policy remains open. |
 | 5 | Maximum ring buffer size / history retention duration | User via coordinator |
 | 6 | Exact macOS architecture and minimum macOS version | User via coordinator |
 | 7 | SSH library/executable selection and connection management details | Planner in approved plan |

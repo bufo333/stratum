@@ -39,9 +39,9 @@ const CHANNEL_CAPACITY: usize = 256;
 /// Sets up the tokio multi-thread runtime, spawns ingest tasks, runs the
 /// event/draw loop, and restores the terminal on exit (including error paths).
 pub async fn run(cli: Cli) -> Result<()> {
-    // Validate server count (clap already enforces 1–3, but belt-and-suspenders).
-    if cli.servers.is_empty() || cli.servers.len() > 3 {
-        anyhow::bail!("Expected 1–3 servers, got {}", cli.servers.len());
+    // Validate server count (clap already enforces 1–6, but belt-and-suspenders).
+    if cli.servers.is_empty() || cli.servers.len() > 6 {
+        anyhow::bail!("Expected 1–6 servers, got {}", cli.servers.len());
     }
 
     // -----------------------------------------------------------------------

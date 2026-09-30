@@ -14,14 +14,19 @@ use crate::model::ServerState;
 
 /// Stable per-server display color, assigned by positional index.
 ///
-/// Provisional palette (contract Q4 open question); the mapping lives here
-/// for easy revision.
+/// Palette (indices 0–5): Cyan, Yellow, Magenta, Green, Red, Blue.
+/// Indices ≥ 6 wrap via `index % 6` so no call ever panics or returns an
+/// off-palette color.  The count is capped at 6 upstream, so the wrap branch
+/// is a defensive guarantee rather than a normal code path.
 pub fn server_color(index: usize) -> Color {
     match index {
         0 => Color::Cyan,
         1 => Color::Yellow,
         2 => Color::Magenta,
-        _ => Color::White,
+        3 => Color::Green,
+        4 => Color::Red,
+        5 => Color::Blue,
+        _ => server_color(index % 6),
     }
 }
 
@@ -53,8 +58,12 @@ mod tests {
         assert_eq!(server_color(0), Color::Cyan);
         assert_eq!(server_color(1), Color::Yellow);
         assert_eq!(server_color(2), Color::Magenta);
-        // Out of range falls back to White.
-        assert_eq!(server_color(99), Color::White);
+        assert_eq!(server_color(3), Color::Green);
+        assert_eq!(server_color(4), Color::Red);
+        assert_eq!(server_color(5), Color::Blue);
+        // Out-of-range wraps at 6.
+        assert_eq!(server_color(6), Color::Cyan);
+        assert_eq!(server_color(7), Color::Yellow);
     }
 
     #[test]

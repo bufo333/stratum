@@ -15,7 +15,7 @@ pub struct Model {
 }
 
 impl Model {
-    /// Construct a model for the given server hostnames (1–3).
+    /// Construct a model for the given server hostnames (1–6).
     pub fn new(hostnames: Vec<String>) -> Self {
         let servers = hostnames
             .into_iter()

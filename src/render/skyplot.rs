@@ -97,7 +97,10 @@ pub fn build_sat_line(servers: &[(usize, bool)], prn: i32, gnss_id: Option<&str>
         let glyph: &'static str = if used { "●" } else { "○" };
         spans.push(Span::styled(glyph, Style::default().fg(server_color(idx))));
     }
-    spans.push(Span::raw(format!(" {}", sat_label(prn, gnss_id))));
+    spans.push(Span::styled(
+        format!(" {}", sat_label(prn, gnss_id)),
+        Style::default().fg(Color::White),
+    ));
     Line::from(spans)
 }
 
@@ -362,7 +365,7 @@ mod tests {
         assert_eq!(line.spans[2].content, "○");
         assert_eq!(line.spans[2].style.fg, Some(Color::Magenta));
         assert_eq!(line.spans[3].content, " G01");
-        assert_eq!(line.spans[3].style.fg, None);
+        assert_eq!(line.spans[3].style.fg, Some(Color::White));
     }
 
     #[test]
@@ -373,7 +376,7 @@ mod tests {
         assert_eq!(line.spans[0].content, "○");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
         assert_eq!(line.spans[1].content, " 23");
-        assert_eq!(line.spans[1].style.fg, None);
+        assert_eq!(line.spans[1].style.fg, Some(Color::White));
     }
 
     #[test]
@@ -386,6 +389,6 @@ mod tests {
         assert_eq!(line.spans[1].content, "●");
         assert_eq!(line.spans[1].style.fg, Some(Color::Magenta));
         assert_eq!(line.spans[2].content, " R05");
-        assert_eq!(line.spans[2].style.fg, None);
+        assert_eq!(line.spans[2].style.fg, Some(Color::White));
     }
 }
