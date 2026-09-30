@@ -38,12 +38,17 @@ const LABEL_OFFSET_X: f64 = 0.08;
 /// (~half a cell up).
 const LABEL_OFFSET_Y: f64 = 0.06;
 /// Minimum canvas-space distance two satellite dots must keep; closer pairs are
-/// nudged apart (~two x-cells / one y-cell).
-const MIN_DIST: f64 = 0.12;
-/// Canvas-space x step applied per nudge iteration when separating dots.
-const NUDGE_STEP: f64 = 0.08;
-/// Maximum nudge iterations per satellite before giving up (bounds the loop).
-const MAX_NUDGES: usize = 12;
+/// nudged apart (~5 terminal columns at typical panel width so two printed
+/// characters do not share a cell).
+const MIN_DIST: f64 = 0.30;
+/// Canvas-space step magnitude applied per nudge iteration along the
+/// separation vector (~2.5 terminal columns per step; each iteration makes
+/// meaningful, visible progress).
+const NUDGE_STEP: f64 = 0.15;
+/// Maximum nudge iterations per satellite before giving up; larger budget for
+/// dense clusters — worst-case spread 20×0.15=3.0 units, bounded by
+/// `clamp_to_horizon`.
+const MAX_NUDGES: usize = 20;
 /// Guard against division by zero when two satellite dots are exactly coincident.
 const NUDGE_EPSILON: f64 = 1e-9;
 
