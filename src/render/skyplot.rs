@@ -31,6 +31,20 @@ const ASPECT: f64 = 2.0;
 /// Angular step (degrees) used when sampling parametric rings.
 const RING_STEP_DEG: f64 = 3.0;
 
+/// Canvas-space x offset applied to a satellite label relative to its dot,
+/// so overlapping dots still show distinct labels (~one cell right).
+const LABEL_OFFSET_X: f64 = 0.08;
+/// Canvas-space y offset applied to a satellite label relative to its dot
+/// (~half a cell up).
+const LABEL_OFFSET_Y: f64 = 0.06;
+/// Minimum canvas-space distance two satellite dots must keep; closer pairs are
+/// nudged apart (~two x-cells / one y-cell).
+const MIN_DIST: f64 = 0.12;
+/// Canvas-space x step applied per nudge iteration when separating dots.
+const NUDGE_STEP: f64 = 0.08;
+/// Maximum nudge iterations per satellite before giving up (bounds the loop).
+const MAX_NUDGES: usize = 12;
+
 /// Convert polar sky coordinates to canvas (x, y).
 ///
 /// Elevation is clamped to `[0.0, 90.0]`.  Azimuth is normalised into
@@ -82,26 +96,78 @@ pub fn sat_label(prn: i32, gnss_id: Option<&str>) -> String {
     }
 }
 
-/// Build a multi-span `Line` for a satellite entry in the sky plot.
+/// Build a dot-only `Line` for a satellite entry in the sky plot.
 ///
 /// Each entry in `servers` is `(server_index, used)`, pre-sorted ascending by
 /// server index.  For each entry one dot span is pushed — filled `●` when
 /// `used == true`, hollow `○` otherwise — coloured with that server's palette
-/// colour.  A single trailing label span is appended, e.g. `" G01"`.
+/// colour.  No label span is included; the label is printed separately via
+/// `build_label_line`.
 ///
-/// The returned `Line` is `'static`: glyph literals are `&'static str` and the
-/// label is an owned `String`.
-pub fn build_sat_line(servers: &[(usize, bool)], prn: i32, gnss_id: Option<&str>) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(servers.len() + 1);
+/// The returned `Line` is `'static`: glyph literals are `&'static str`.
+pub fn build_dot_line(servers: &[(usize, bool)]) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(servers.len());
     for &(idx, used) in servers {
         let glyph: &'static str = if used { "●" } else { "○" };
         spans.push(Span::styled(glyph, Style::default().fg(server_color(idx))));
     }
-    spans.push(Span::styled(
-        format!(" {}", sat_label(prn, gnss_id)),
-        Style::default().fg(Color::White),
-    ));
     Line::from(spans)
+}
+
+/// Build a label-only `Line` for a satellite entry in the sky plot.
+///
+/// Returns a single white span containing the satellite label (e.g. `"G01"`,
+/// `"R05"`, `"23"`).  No leading space — the caller positions the label
+/// geometrically via `LABEL_OFFSET_X`/`LABEL_OFFSET_Y`.
+///
+/// The returned `Line` is `'static` (owns its `String`).
+pub fn build_label_line(prn: i32, gnss_id: Option<&str>) -> Line<'static> {
+    Line::from(Span::styled(
+        sat_label(prn, gnss_id),
+        Style::default().fg(Color::White),
+    ))
+}
+
+/// Clamp `(x, y)` to the horizon circle.
+///
+/// Because x is scaled by `ASPECT`, the horizon is the unit circle in
+/// `(x/ASPECT, y)`.  Points already inside are returned unchanged; points
+/// outside are scaled back onto the ring.
+fn clamp_to_horizon(x: f64, y: f64) -> (f64, f64) {
+    let nx = x / ASPECT;
+    let r = (nx * nx + y * y).sqrt();
+    if r > 1.0 {
+        ((nx / r) * ASPECT, y / r)
+    } else {
+        (x, y)
+    }
+}
+
+/// Resolve dot collisions deterministically.
+///
+/// `positions` are dot centres in canvas coordinates, in a stable order (the
+/// caller passes them in `BTreeMap` key order).  Returns the same number of
+/// positions; the first is never moved.  Each later position that lands within
+/// `MIN_DIST` of an already-placed one is shifted `+NUDGE_STEP` in x (up to
+/// `MAX_NUDGES` times) until it clears every placed point or the step budget
+/// is exhausted, then clamped to the horizon.
+fn spread_positions(positions: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut placed: Vec<(f64, f64)> = Vec::with_capacity(positions.len());
+    for &(px, py) in positions {
+        let (mut x, y) = (px, py);
+        for _ in 0..MAX_NUDGES {
+            let collides = placed
+                .iter()
+                .any(|&(qx, qy)| ((x - qx) * (x - qx) + (y - qy) * (y - qy)).sqrt() < MIN_DIST);
+            if !collides {
+                break;
+            }
+            x += NUDGE_STEP;
+        }
+        let (x, y) = clamp_to_horizon(x, y);
+        placed.push((x, y));
+    }
+    placed
 }
 
 /// Sample a ring of a given sky-plot radius as a set of canvas (x, y) points.
@@ -207,15 +273,27 @@ pub fn render_sky_plot(f: &mut Frame, area: Rect, model: &Model) {
             // --- Layer 1: satellites ---
             ctx.layer();
 
-            for (&(prn, _prefix), (pos, gnss_id, entries)) in &sat_map {
-                let (x, y) = *pos;
-                let mut sorted_entries = entries.clone();
-                sorted_entries.sort_by_key(|&(idx, _)| idx);
-                ctx.print(
-                    x,
-                    y,
-                    build_sat_line(&sorted_entries, prn, gnss_id.as_deref()),
-                );
+            // Build drawables in BTreeMap key order (deterministic).
+            let drawables: Vec<(f64, f64, Line<'static>, Line<'static>)> = sat_map
+                .iter()
+                .map(|(&(prn, _prefix), (pos, gnss_id, entries))| {
+                    let (px, py) = *pos;
+                    let mut sorted_entries = entries.clone();
+                    sorted_entries.sort_by_key(|&(idx, _)| idx);
+                    let dot = build_dot_line(&sorted_entries);
+                    let label = build_label_line(prn, gnss_id.as_deref());
+                    (px, py, dot, label)
+                })
+                .collect();
+
+            // Nudge coincident dot positions apart, keeping dots on-horizon.
+            let raw_positions: Vec<(f64, f64)> =
+                drawables.iter().map(|&(x, y, _, _)| (x, y)).collect();
+            let nudged = spread_positions(&raw_positions);
+
+            for ((_, _, dot, label), (nx, ny)) in drawables.into_iter().zip(nudged) {
+                ctx.print(nx, ny, dot);
+                ctx.print(nx + LABEL_OFFSET_X, ny + LABEL_OFFSET_Y, label);
             }
         });
 
@@ -351,44 +429,148 @@ mod tests {
         assert_eq!(sat_label(123, Some("GPS")), "G123");
     }
 
-    // build_sat_line
+    // build_dot_line
 
     #[test]
-    fn three_servers_mixed_used() {
-        // servers 0 (used), 1 (used), 2 (not used) → 4 spans: ●●○ + label
-        let line = build_sat_line(&[(0, true), (1, true), (2, false)], 1, Some("GPS"));
-        assert_eq!(line.spans.len(), 4, "expected 3 dots + 1 label");
+    fn dot_line_three_servers_mixed() {
+        // servers 0 (used), 1 (used), 2 (not used) → 3 dot spans, no label
+        let line = build_dot_line(&[(0, true), (1, true), (2, false)]);
+        assert_eq!(line.spans.len(), 3, "expected 3 dot spans, no label");
         assert_eq!(line.spans[0].content, "●");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
         assert_eq!(line.spans[1].content, "●");
         assert_eq!(line.spans[1].style.fg, Some(Color::Yellow));
         assert_eq!(line.spans[2].content, "○");
         assert_eq!(line.spans[2].style.fg, Some(Color::Magenta));
-        assert_eq!(line.spans[3].content, " G01");
-        assert_eq!(line.spans[3].style.fg, Some(Color::White));
     }
 
     #[test]
-    fn single_server_not_used_no_constellation() {
-        // server 0 not used, no gnss_id → ○ + bare PRN label
-        let line = build_sat_line(&[(0, false)], 23, None);
-        assert_eq!(line.spans.len(), 2, "expected 1 dot + 1 label");
+    fn dot_line_single_server() {
+        // server 0 not used → 1 hollow dot span
+        let line = build_dot_line(&[(0, false)]);
+        assert_eq!(line.spans.len(), 1, "expected 1 dot span");
         assert_eq!(line.spans[0].content, "○");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
-        assert_eq!(line.spans[1].content, " 23");
-        assert_eq!(line.spans[1].style.fg, Some(Color::White));
     }
 
     #[test]
-    fn subset_servers_no_yellow_dot() {
+    fn dot_line_subset_no_yellow() {
         // servers 0 and 2 only — no Yellow dot for server 1
-        let line = build_sat_line(&[(0, true), (2, true)], 5, Some("GLONASS"));
-        assert_eq!(line.spans.len(), 3, "expected 2 dots + 1 label");
+        let line = build_dot_line(&[(0, true), (2, true)]);
+        assert_eq!(line.spans.len(), 2, "expected 2 dot spans");
         assert_eq!(line.spans[0].content, "●");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
         assert_eq!(line.spans[1].content, "●");
         assert_eq!(line.spans[1].style.fg, Some(Color::Magenta));
-        assert_eq!(line.spans[2].content, " R05");
-        assert_eq!(line.spans[2].style.fg, Some(Color::White));
+    }
+
+    // build_label_line
+
+    #[test]
+    fn label_line_gps_zero_padded() {
+        let line = build_label_line(1, Some("GPS"));
+        assert_eq!(line.spans.len(), 1, "expected single label span");
+        assert_eq!(line.spans[0].content, "G01");
+        assert_eq!(line.spans[0].style.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn label_line_bare_prn() {
+        let line = build_label_line(23, None);
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].content, "23");
+        assert_eq!(line.spans[0].style.fg, Some(Color::White));
+    }
+
+    #[test]
+    fn label_line_large_prn() {
+        // Guards against truncation of PRNs > 99.
+        let line = build_label_line(123, Some("GPS"));
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].content, "G123");
+        assert_eq!(line.spans[0].style.fg, Some(Color::White));
+    }
+
+    // spread_positions
+
+    #[test]
+    fn spread_leaves_distant_points() {
+        let pts = vec![(-0.5, 0.0), (0.5, 0.0)];
+        let out = spread_positions(&pts);
+        assert!(
+            (out[0].0 - pts[0].0).abs() < EPS,
+            "first moved unexpectedly"
+        );
+        assert!(
+            (out[1].0 - pts[1].0).abs() < EPS,
+            "second moved unexpectedly"
+        );
+    }
+
+    #[test]
+    fn spread_first_never_moves() {
+        let pts = vec![(0.1, 0.1), (0.1, 0.1), (0.1, 0.1)];
+        let out = spread_positions(&pts);
+        assert!(
+            (out[0].0 - pts[0].0).abs() < EPS && (out[0].1 - pts[0].1).abs() < EPS,
+            "first element must not move"
+        );
+    }
+
+    #[test]
+    fn spread_separates_coincident() {
+        let pts = vec![(0.1, 0.1), (0.1, 0.1)];
+        let out = spread_positions(&pts);
+        // First element is unchanged.
+        assert!((out[0].0 - 0.1).abs() < EPS && (out[0].1 - 0.1).abs() < EPS);
+        // Second is at least MIN_DIST away from first.
+        let dist = ((out[1].0 - out[0].0).powi(2) + (out[1].1 - out[0].1).powi(2)).sqrt();
+        assert!(dist >= MIN_DIST - EPS, "dist={dist} < MIN_DIST={MIN_DIST}");
+    }
+
+    #[test]
+    fn spread_is_deterministic() {
+        let pts = vec![(0.0, 0.0), (0.0, 0.0), (0.05, 0.05)];
+        let out1 = spread_positions(&pts);
+        let out2 = spread_positions(&pts);
+        for (a, b) in out1.iter().zip(out2.iter()) {
+            assert!(
+                (a.0 - b.0).abs() < EPS && (a.1 - b.1).abs() < EPS,
+                "non-deterministic: {a:?} vs {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn spread_clamps_to_horizon() {
+        // A cluster near the horizon east that will be nudged rightward.
+        let pts = vec![(1.8, 0.0), (1.8, 0.0), (1.8, 0.0)];
+        let out = spread_positions(&pts);
+        for &(x, y) in &out {
+            let nx = x / ASPECT;
+            let r_sq = nx * nx + y * y;
+            assert!(
+                r_sq <= 1.0 + EPS,
+                "point outside horizon: ({x},{y}), r²={r_sq}"
+            );
+        }
+    }
+
+    // clamp_to_horizon
+
+    #[test]
+    fn clamp_inside_unchanged() {
+        let (x, y) = clamp_to_horizon(0.0, 0.5);
+        assert!((x - 0.0).abs() < EPS);
+        assert!((y - 0.5).abs() < EPS);
+    }
+
+    #[test]
+    fn clamp_outside_pulled_to_ring() {
+        // (3.0, 0.0) → normalized radius = 3.0/ASPECT = 1.5, which is >1.
+        let (x, y) = clamp_to_horizon(3.0, 0.0);
+        let nx = x / ASPECT;
+        let r = (nx * nx + y * y).sqrt();
+        assert!((r - 1.0).abs() < EPS, "r={r}");
     }
 }
