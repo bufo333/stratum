@@ -9,7 +9,7 @@ pub mod table;
 
 use ratatui::style::Color;
 
-use crate::model::{Model, ServerState};
+use crate::model::ServerState;
 
 /// Stable per-server display color, assigned by positional index.
 ///
@@ -21,26 +21,6 @@ pub fn server_color(index: usize) -> Color {
         1 => Color::Yellow,
         2 => Color::Magenta,
         _ => Color::White,
-    }
-}
-
-/// Top-level layout descriptor.
-///
-/// The actual rendering is driven by `app.rs`, which calls the widget
-/// functions in each sub-module.  This struct is a convenience holder for
-/// parameters shared across render calls.
-#[derive(Debug, Clone)]
-pub struct RenderContext<'a> {
-    pub model: &'a Model,
-}
-
-impl<'a> RenderContext<'a> {
-    pub fn new(model: &'a Model) -> Self {
-        Self { model }
-    }
-
-    pub fn servers(&self) -> &[ServerState] {
-        self.model.servers()
     }
 }
 
@@ -59,14 +39,6 @@ pub fn format_status(server: &ServerState) -> &'static str {
 pub fn fmt_opt_f64(v: Option<f64>, precision: usize) -> String {
     match v {
         Some(f) => format!("{f:.precision$}"),
-        None => "n/a".to_owned(),
-    }
-}
-
-/// Format an `Option<T: Display>` for display, showing "n/a" when `None`.
-pub fn fmt_opt<T: std::fmt::Display>(v: Option<&T>) -> String {
-    match v {
-        Some(t) => t.to_string(),
         None => "n/a".to_owned(),
     }
 }

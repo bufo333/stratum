@@ -109,7 +109,11 @@ fn render_gps_detail(f: &mut Frame, area: Rect, server: &ServerState) {
             Some(3) => "3D fix",
             Some(_) => "fix",
         };
-        let used: usize = g.satellites.iter().filter(|s| s.used).count();
+        let used: usize = g
+            .satellites
+            .iter()
+            .filter(|s| s.used.unwrap_or(false))
+            .count();
         let total: usize = g.satellites.len();
 
         vec![

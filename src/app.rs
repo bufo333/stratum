@@ -196,6 +196,7 @@ fn draw(f: &mut ratatui::Frame, model: &Model) {
 /// has not grown in `threshold` samples worth of time — this is a simplified
 /// heuristic; a real implementation would compare wall-clock timestamps on
 /// samples.
+#[allow(dead_code)]
 pub fn is_stale(_sample_count_a: usize, _sample_count_b: usize) -> bool {
     // Placeholder: stale detection is driven by the orchestration loop
     // comparing sample timestamps.  Returns false until timestamps are added

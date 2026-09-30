@@ -70,7 +70,10 @@ pub async fn run_server_ingest(index: usize, hostname: String, tx: mpsc::Sender<
                 return;
             }
             Err(e) => {
-                tracing_or_eprintln(index, &hostname, &e);
+                // Send the error as a Log message instead of writing to stderr,
+                // since the terminal alternate-screen may be active.
+                let msg = format!("[trmnlapp] server[{index}] {hostname}: ingest error: {e:#}");
+                let _ = tx.send(ServerUpdate::Log(msg)).await;
 
                 // Mark server as unreachable.
                 if tx
@@ -164,12 +167,6 @@ async fn run_ingest_once(
     }
 
     Ok(())
-}
-
-/// Best-effort status/error log.  Uses `eprintln!` since we do not pull in a
-/// logging crate — tracing can be added later.
-fn tracing_or_eprintln(index: usize, hostname: &str, err: &anyhow::Error) {
-    eprintln!("[trmnlapp] server[{index}] {hostname}: ingest error: {err:#}");
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,8 @@ impl Model {
                     s.set_status(status);
                 }
             }
+            // Diagnostic log from an ingest task; discarded for now.
+            ServerUpdate::Log(_) => {}
         }
     }
 

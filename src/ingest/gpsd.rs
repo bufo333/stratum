@@ -208,8 +208,8 @@ fn sky_to_satellites(sky: &SkyMessage) -> Vec<SatelliteInfo> {
         .unwrap_or(&[])
         .iter()
         .map(|e| SatelliteInfo {
-            prn: e.prn.unwrap_or(0),
-            used: e.used.unwrap_or(false),
+            prn: e.prn,
+            used: e.used,
             elevation: e.el,
             azimuth: e.az,
             snr: e.ss,
@@ -317,12 +317,12 @@ mod tests {
             let sats = sky_to_satellites(&sky);
             assert_eq!(sats.len(), 3);
             // First satellite: GPS PRN 1, used
-            assert_eq!(sats[0].prn, 1);
-            assert!(sats[0].used);
+            assert_eq!(sats[0].prn, Some(1));
+            assert_eq!(sats[0].used, Some(true));
             assert_eq!(sats[0].gnss_id.as_deref(), Some("GPS"));
             // Third satellite: GLONASS
-            assert_eq!(sats[2].prn, 65);
-            assert!(sats[2].used);
+            assert_eq!(sats[2].prn, Some(65));
+            assert_eq!(sats[2].used, Some(true));
             assert_eq!(sats[2].gnss_id.as_deref(), Some("GLONASS"));
         } else {
             panic!("expected SKY");

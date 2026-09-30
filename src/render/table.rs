@@ -53,7 +53,11 @@ pub fn render_summary_table(f: &mut Frame, area: Rect, model: &Model) {
 
             let sats = match gps {
                 Some(g) => {
-                    let used = g.satellites.iter().filter(|s| s.used).count();
+                    let used = g
+                        .satellites
+                        .iter()
+                        .filter(|s| s.used.unwrap_or(false))
+                        .count();
                     format!("{}/{}", used, g.satellites.len())
                 }
                 None => "n/a".to_owned(),

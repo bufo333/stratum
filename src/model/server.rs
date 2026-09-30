@@ -13,6 +13,7 @@ pub enum ServerStatus {
     Ok,
     /// Data was received but has not been refreshed for longer than the
     /// stale threshold.
+    #[allow(dead_code)]
     Stale,
     /// The server cannot be reached (SSH failure, timeout, etc.).
     Unreachable,
@@ -45,11 +46,13 @@ pub struct NtpSample {
     /// Leap-second indicator text ("Normal", "InsertSecond", etc.).
     pub leap_status: Option<String>,
     /// Per-source rows from `chronyc sources -v` or `ntpq -p`.
+    #[allow(dead_code)]
     pub sources: Vec<NtpSource>,
 }
 
 /// One row from `chronyc sources -v` or `ntpq -p`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct NtpSource {
     /// Source name or IP address.
     pub name: String,
@@ -86,8 +89,10 @@ pub struct GpsSample {
     /// Altitude above mean sea level (metres).
     pub alt_m: Option<f64>,
     /// UTC time string from the receiver.
+    #[allow(dead_code)]
     pub time: Option<String>,
     /// Estimated position error (metres).
+    #[allow(dead_code)]
     pub ept: Option<f64>,
     /// Satellites visible in the SKY message.
     pub satellites: Vec<SatelliteInfo>,
@@ -95,11 +100,12 @@ pub struct GpsSample {
 
 /// One satellite entry from the gpsd `SKY` class.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SatelliteInfo {
     /// Satellite PRN/ID.
-    pub prn: i32,
+    pub prn: Option<i32>,
     /// Whether this satellite is used in the fix.
-    pub used: bool,
+    pub used: Option<bool>,
     /// Elevation angle (degrees).
     pub elevation: Option<f64>,
     /// Azimuth (degrees).
@@ -136,6 +142,12 @@ pub enum ServerUpdate {
         index: usize,
         status: ServerStatus,
     },
+    /// A diagnostic log message from an ingest task.
+    ///
+    /// Used instead of `eprintln!` so that ingest tasks do not write to
+    /// stderr while the terminal alternate-screen is active.
+    #[allow(dead_code)]
+    Log(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +227,7 @@ impl ServerState {
         &self.ntp_history
     }
 
+    #[allow(dead_code)]
     pub fn gps_history(&self) -> &RingBuffer<GpsSample> {
         &self.gps_history
     }

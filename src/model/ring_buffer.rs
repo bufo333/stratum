@@ -46,21 +46,25 @@ impl<T> RingBuffer<T> {
     }
 
     /// Returns the number of elements currently stored.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     /// Returns `true` when no elements are stored.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     /// Returns `true` when the buffer holds exactly `capacity` elements.
+    #[allow(dead_code)]
     pub fn is_full(&self) -> bool {
         self.inner.len() == self.capacity
     }
 
     /// The fixed capacity of the buffer.
+    #[allow(dead_code)]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -72,6 +76,7 @@ impl<T> RingBuffer<T> {
 
     /// Return a reference to the most recently pushed element, or `None` if
     /// empty.
+    #[allow(dead_code)]
     pub fn latest(&self) -> Option<&T> {
         self.inner.back()
     }
