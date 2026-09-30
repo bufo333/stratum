@@ -5,6 +5,7 @@
 
 pub mod graphs;
 pub mod panels;
+pub mod skyplot;
 pub mod table;
 
 use ratatui::style::Color;

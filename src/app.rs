@@ -145,7 +145,7 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
 ///
 /// Layout (top → bottom):
 ///   - Summary table (20% height)
-///   - Graphs area (40% height): offset | freq side by side
+///   - Graphs area (40% height): offset (~34%) | freq (~33%) | sky plot (~33%)
 ///   - Server panels (40% height): one panel per server
 fn draw(f: &mut ratatui::Frame, model: &Model) {
     let size = f.area();
@@ -163,14 +163,19 @@ fn draw(f: &mut ratatui::Frame, model: &Model) {
     // Summary table.
     render::table::render_summary_table(f, top_chunks[0], model);
 
-    // Graphs: offset | freq.
+    // Graphs: offset | freq | sky plot.
     let graph_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(top_chunks[1]);
 
     render::graphs::render_offset_graph(f, graph_chunks[0], model);
     render::graphs::render_freq_graph(f, graph_chunks[1], model);
+    render::skyplot::render_sky_plot(f, graph_chunks[2], model);
 
     // Server panels: one per server, evenly distributed.
     let n = model.server_count().max(1);
