@@ -4,10 +4,12 @@
 //! Reads model snapshots only — no terminal I/O, no model mutation, no ingest
 //! imports.
 
+use std::collections::BTreeMap;
+
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{
         canvas::{Canvas, Points},
         Block, Borders,
@@ -80,6 +82,25 @@ pub fn sat_label(prn: i32, gnss_id: Option<&str>) -> String {
     }
 }
 
+/// Build a multi-span `Line` for a satellite entry in the sky plot.
+///
+/// Each entry in `servers` is `(server_index, used)`, pre-sorted ascending by
+/// server index.  For each entry one dot span is pushed — filled `●` when
+/// `used == true`, hollow `○` otherwise — coloured with that server's palette
+/// colour.  A single trailing label span is appended, e.g. `" G01"`.
+///
+/// The returned `Line` is `'static`: glyph literals are `&'static str` and the
+/// label is an owned `String`.
+pub fn build_sat_line(servers: &[(usize, bool)], prn: i32, gnss_id: Option<&str>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(servers.len() + 1);
+    for &(idx, used) in servers {
+        let glyph: &'static str = if used { "●" } else { "○" };
+        spans.push(Span::styled(glyph, Style::default().fg(server_color(idx))));
+    }
+    spans.push(Span::raw(format!(" {}", sat_label(prn, gnss_id))));
+    Line::from(spans)
+}
+
 /// Sample a ring of a given sky-plot radius as a set of canvas (x, y) points.
 fn ring_points(radius: f64) -> Vec<(f64, f64)> {
     let steps = (360.0 / RING_STEP_DEG).ceil() as usize + 1;
@@ -94,14 +115,19 @@ fn ring_points(radius: f64) -> Vec<(f64, f64)> {
         .collect()
 }
 
+/// Map key: `(prn, constellation_prefix)`. Value: canvas position, optional
+/// `gnss_id` string, and the list of `(server_index, used)` entries.
+type SatMap = BTreeMap<(i32, Option<char>), ((f64, f64), Option<String>, Vec<(usize, bool)>)>;
+
 /// Render the combined polar sky-plot into `area`.
 ///
 /// Draws horizon / 30° / 60° rings, cardinal labels, and one labelled dot per
 /// above-horizon satellite from every server.  When no plottable satellites
 /// exist the grid is still drawn with a `no satellites` hint.
 pub fn render_sky_plot(f: &mut Frame, area: Rect, model: &Model) {
-    // Collect plottable satellites: (server_index, elevation, azimuth, used, prn, gnss_id).
-    let mut sats: Vec<(usize, f64, f64, bool, i32, Option<String>)> = Vec::new();
+    // Group plottable satellites by (prn, constellation_prefix) across all servers.
+    // Value: ((canvas_x, canvas_y), representative_gnss_id, [(server_index, used)])
+    let mut sat_map: SatMap = BTreeMap::new();
     for server in model.servers() {
         if let Some(gps) = server.latest_gps() {
             for sat in &gps.satellites {
@@ -109,11 +135,18 @@ pub fn render_sky_plot(f: &mut Frame, area: Rect, model: &Model) {
                     continue;
                 };
                 let used = sat.used == Some(true);
-                sats.push((server.index, el, az, used, prn, sat.gnss_id.clone()));
+                let key = (prn, constellation_prefix(sat.gnss_id.as_deref()));
+                sat_map
+                    .entry(key)
+                    .and_modify(|(_, _, entries)| entries.push((server.index, used)))
+                    .or_insert_with(|| {
+                        let pos = polar_to_xy(el, az);
+                        (pos, sat.gnss_id.clone(), vec![(server.index, used)])
+                    });
             }
         }
     }
-    let have_sats = !sats.is_empty();
+    let have_sats = !sat_map.is_empty();
 
     let block = Block::default()
         .title("Sky (all servers)")
@@ -171,13 +204,15 @@ pub fn render_sky_plot(f: &mut Frame, area: Rect, model: &Model) {
             // --- Layer 1: satellites ---
             ctx.layer();
 
-            for (server_idx, el, az, used, prn, gnss_id) in &sats {
-                let (x, y) = polar_to_xy(*el, *az);
-                let color = server_color(*server_idx);
-                let glyph = if *used { "●" } else { "○" };
-                let label = sat_label(*prn, gnss_id.as_deref());
-                let text = format!("{}{}", glyph, label);
-                ctx.print(x, y, Line::styled(text, Style::default().fg(color)));
+            for (&(prn, _prefix), (pos, gnss_id, entries)) in &sat_map {
+                let (x, y) = *pos;
+                let mut sorted_entries = entries.clone();
+                sorted_entries.sort_by_key(|&(idx, _)| idx);
+                ctx.print(
+                    x,
+                    y,
+                    build_sat_line(&sorted_entries, prn, gnss_id.as_deref()),
+                );
             }
         });
 
@@ -311,5 +346,46 @@ mod tests {
     fn large_prn_not_truncated() {
         // PRNs > 99 must not be clipped.
         assert_eq!(sat_label(123, Some("GPS")), "G123");
+    }
+
+    // build_sat_line
+
+    #[test]
+    fn three_servers_mixed_used() {
+        // servers 0 (used), 1 (used), 2 (not used) → 4 spans: ●●○ + label
+        let line = build_sat_line(&[(0, true), (1, true), (2, false)], 1, Some("GPS"));
+        assert_eq!(line.spans.len(), 4, "expected 3 dots + 1 label");
+        assert_eq!(line.spans[0].content, "●");
+        assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(line.spans[1].content, "●");
+        assert_eq!(line.spans[1].style.fg, Some(Color::Yellow));
+        assert_eq!(line.spans[2].content, "○");
+        assert_eq!(line.spans[2].style.fg, Some(Color::Magenta));
+        assert_eq!(line.spans[3].content, " G01");
+        assert_eq!(line.spans[3].style.fg, None);
+    }
+
+    #[test]
+    fn single_server_not_used_no_constellation() {
+        // server 0 not used, no gnss_id → ○ + bare PRN label
+        let line = build_sat_line(&[(0, false)], 23, None);
+        assert_eq!(line.spans.len(), 2, "expected 1 dot + 1 label");
+        assert_eq!(line.spans[0].content, "○");
+        assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(line.spans[1].content, " 23");
+        assert_eq!(line.spans[1].style.fg, None);
+    }
+
+    #[test]
+    fn subset_servers_no_yellow_dot() {
+        // servers 0 and 2 only — no Yellow dot for server 1
+        let line = build_sat_line(&[(0, true), (2, true)], 5, Some("GLONASS"));
+        assert_eq!(line.spans.len(), 3, "expected 2 dots + 1 label");
+        assert_eq!(line.spans[0].content, "●");
+        assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
+        assert_eq!(line.spans[1].content, "●");
+        assert_eq!(line.spans[1].style.fg, Some(Color::Magenta));
+        assert_eq!(line.spans[2].content, " R05");
+        assert_eq!(line.spans[2].style.fg, None);
     }
 }
