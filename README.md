@@ -31,6 +31,11 @@ servers.
 
 ![stratum demo](screenshots/stratum-demo.png)
 
+Timing console (Tab) with large segmented clocks, offset needles and
+light-distance equivalents:
+
+![stratum timing console](screenshots/stratum-timing.png)
+
 ## Prerequisites
 
 - Rust stable toolchain.
