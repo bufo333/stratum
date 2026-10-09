@@ -86,51 +86,52 @@ use ratatui::{
 };
 use std::time::Instant;
 
-/// Timing geometry includes the summary, both existing areas, and footer.
+/// Selected content of the middle row; orchestration owns this state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MiddleView {
+    #[default]
+    Graphs,
+    Timing,
+}
+
+/// Required dimensions refer only to the middle rectangle.
 fn timing_geometry(count: usize, width: u16) -> (u16, u16, u16) {
     let count = count.max(1) as u16;
     let columns = count.min(3).min((width / 38).max(1));
-    (
-        columns,
-        columns * 38,
-        count + 3 + count.div_ceil(columns) * 5 + 12 + 1,
-    )
+    (columns, columns * 38, count.div_ceil(columns) * 5)
 }
 
-pub fn draw(f: &mut ratatui::Frame, model: &Model, now: Instant) {
-    let area = f.area();
+fn dashboard_rows(area: Rect) -> [Rect; 3] {
     let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
+    let chunks = Layout::vertical([
+        Constraint::Percentage(20),
+        Constraint::Percentage(40),
+        Constraint::Percentage(40),
+    ])
+    .split(body);
+    [chunks[0], chunks[1], chunks[2]]
+}
+
+pub fn draw(f: &mut ratatui::Frame, model: &Model, view: MiddleView, now: Instant) {
+    let area = f.area();
+    let [summary, middle, details] = dashboard_rows(area);
     let (columns, required_width, required_height) =
-        timing_geometry(model.server_count(), area.width);
-    let visible = area.width >= required_width && area.height >= required_height;
-    let (summary, graphs, details) = if visible {
-        let summary_height = model.server_count() as u16 + 3;
-        let timing_height = (model.server_count().max(1) as u16).div_ceil(columns) * 5;
-        let remaining = body.height - summary_height - timing_height;
-        let chunks = Layout::vertical([
-            Constraint::Length(summary_height),
-            Constraint::Length(timing_height),
-            Constraint::Length(remaining / 2),
-            Constraint::Length(remaining - remaining / 2),
-        ])
-        .split(body);
-        clocks::render(f, chunks[1], model, columns, now);
-        (chunks[0], chunks[2], chunks[3])
+        timing_geometry(model.server_count(), middle.width);
+    let fits = middle.width >= required_width && middle.height >= required_height;
+    table::render_summary_table(f, summary, model);
+    render_details(f, details, model);
+    if view == MiddleView::Timing && fits {
+        clocks::render(f, middle, model, columns, now);
     } else {
-        let chunks = Layout::vertical([
-            Constraint::Percentage(20),
-            Constraint::Percentage(40),
-            Constraint::Percentage(40),
-        ])
-        .split(body);
-        (chunks[0], chunks[1], chunks[2])
-    };
-    dashboard(f, summary, graphs, details, model);
+        render_graphs(f, middle, model);
+    }
     if area.height > 0 {
-        let footer = if visible {
-            "q: quit".to_owned()
-        } else {
-            format!("q: quit | Timing needs {required_width}x{required_height}")
+        let footer = match view {
+            MiddleView::Graphs => "Graphs | Tab: timing | q: quit".to_owned(),
+            MiddleView::Timing if fits => "Timing | Tab: graphs | q: quit".to_owned(),
+            MiddleView::Timing => format!(
+                "Timing needs middle {required_width}x{required_height} | Tab: graphs | q: quit"
+            ),
         };
         f.render_widget(
             Paragraph::new(footer),
@@ -139,10 +140,7 @@ pub fn draw(f: &mut ratatui::Frame, model: &Model, now: Instant) {
     }
 }
 
-/// Original dashboard widgets retain their content and horizontal arrangement.
-fn dashboard(f: &mut ratatui::Frame, summary: Rect, graphs: Rect, details: Rect, model: &Model) {
-    table::render_summary_table(f, summary, model);
-
+fn render_graphs(f: &mut ratatui::Frame, graphs: Rect, model: &Model) {
     // Graphs: offset | freq | sky plot.
     let graph_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -156,7 +154,9 @@ fn dashboard(f: &mut ratatui::Frame, summary: Rect, graphs: Rect, details: Rect,
     graphs::render_offset_graph(f, graph_chunks[0], model);
     graphs::render_freq_graph(f, graph_chunks[1], model);
     skyplot::render_sky_plot(f, graph_chunks[2], model);
+}
 
+fn render_details(f: &mut ratatui::Frame, details: Rect, model: &Model) {
     // Server panels: one per server, evenly distributed.
     let n = model.server_count().max(1);
     let panel_constraints: Vec<Constraint> =

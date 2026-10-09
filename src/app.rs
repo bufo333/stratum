@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -71,6 +72,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cli) -> Result<()> {
     // Build model.
     let mut model = Model::new(cli.servers.clone());
+    let mut middle_view = render::MiddleView::default();
 
     // Bounded mpsc channel: one Sender per ingest task, single Receiver here.
     let (tx, mut rx) = mpsc::channel::<ServerUpdate>(CHANNEL_CAPACITY);
@@ -106,7 +108,7 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
         // Draw
         // -----------------------------------------------------------------------
         let now = Instant::now();
-        terminal.draw(|f| render::draw(f, &model, now))?;
+        terminal.draw(|f| render::draw(f, &model, middle_view, now))?;
 
         // -----------------------------------------------------------------------
         // Wait for next event or timeout (poll blocks for up to REPAINT_INTERVAL).
@@ -114,7 +116,7 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
         if crossterm::event::poll(REPAINT_INTERVAL)? {
             match event::read()? {
                 Event::Key(key) => {
-                    if handle_key(key) {
+                    if handle_key(key, &mut middle_view) {
                         return Ok(());
                     }
                 }
@@ -132,10 +134,20 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
     }
 }
 
-fn handle_key(key: KeyEvent) -> bool {
+fn handle_key(key: KeyEvent, view: &mut render::MiddleView) -> bool {
+    if key.kind == KeyEventKind::Release {
+        return false;
+    }
     match key.code {
         KeyCode::Char('q') => true,
         KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => true,
+        KeyCode::Tab if key.kind == KeyEventKind::Press => {
+            *view = match view {
+                render::MiddleView::Graphs => render::MiddleView::Timing,
+                render::MiddleView::Timing => render::MiddleView::Graphs,
+            };
+            false
+        }
         _ => false,
     }
 }
@@ -144,19 +156,29 @@ fn handle_key(key: KeyEvent) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn controls_ignore_tab_and_quit() {
-        assert!(!handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
-        assert!(handle_key(KeyEvent::new(
-            KeyCode::Char('q'),
-            KeyModifiers::NONE
-        )));
-        assert!(handle_key(KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL
-        )));
-        assert!(!handle_key(KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::NONE
-        )));
+    fn controls_toggle_middle_and_quit_in_both_modes() {
+        let mut view = render::MiddleView::default();
+        assert_eq!(view, render::MiddleView::Graphs);
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        for expected in [render::MiddleView::Timing, render::MiddleView::Graphs] {
+            assert!(!handle_key(tab, &mut view));
+            assert_eq!(view, expected);
+            for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
+                assert!(!handle_key(KeyEvent { kind, ..tab }, &mut view));
+                assert_eq!(view, expected);
+            }
+            assert!(handle_key(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                &mut view
+            ));
+            assert!(handle_key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &mut view
+            ));
+            assert!(!handle_key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+                &mut view
+            ));
+        }
     }
 }

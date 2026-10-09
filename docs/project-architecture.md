@@ -143,7 +143,7 @@ structural changes.
 `src/ui/` is an equally valid alternative to `src/render/`. The planner chooses
 one and records it in the approved plan.
 
-## Approved Integrated Timing Ownership (Plans 012–013)
+## Approved Integrated Timing Ownership (Plans 012–014)
 
 - `src/ingest/clock.rs` detects optional `date +%s.%N` support over the existing
   SSH session, validates integer epoch nanoseconds and normalizes capture midpoint,
@@ -155,12 +155,15 @@ one and records it in the approved plan.
 - `src/model/server.rs` owns the latest optional capture and NTP provenance and
   receipt timestamp. Pure projection/freshness helpers receive explicit monotonic
   time; model and widgets never acquire clocks themselves.
-- `src/render/mod.rs` owns the single dashboard composition, timing-strip sizing,
-  dashboard-first small-terminal fallback and controls/geometry footer.
-  `src/render/clocks.rs` reads model snapshots for five-row cards with ordinary
-  UTC digits, offset needles, light equivalents and independent receipt ages.
-- `src/app.rs` owns quit/resize input and obtains one monotonic timestamp per
-  draw. It delegates widget composition to the render entry point.
+- `src/render/mod.rs` owns stable 20/40/40 summary/middle/details composition,
+  middle-row graph/timing selection rendering, graph fallback when all timing
+  cards cannot fit, and the controls/middle-geometry footer.
+  `src/render/clocks.rs` reads snapshots for equal timing slots: segmented UTC
+  digits and seconds sweep at 12 rows per card, compact ordinary digits at 5–11
+  rows, offset needles, light equivalents and independent receipt ages.
+- `src/app.rs` owns the middle-view selection (Graphs initially), Tab/quit/resize
+  input, and one monotonic timestamp per draw. Selection persists across resize;
+  Tab press toggles only the middle row. It delegates composition to rendering.
 
 ## Concurrency Model (Planning Decisions)
 

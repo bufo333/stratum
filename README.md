@@ -16,7 +16,7 @@ servers.
 ## Features
 
 - Monitors 1–6 servers simultaneously.
-- Compact server clocks, offset needles and light-distance equivalents within the dashboard.
+- Tab switches the middle row between graphs and server timing instruments.
 - Combined color-coded graphs (one line per server per metric) with axis scales.
 - Per-server detail panels.
 - Summary table across all servers.
@@ -68,16 +68,23 @@ trmnlapp pi@ntp1 pi@ntp2 pi@ntp3
 
 ## Timing console
 
-The dashboard includes small, five-row timing boxes below the summary, alongside
-its existing graphs, satellite sky plot and server details. **q** or **Ctrl-C**
-quits; Tab has no action. Boxes use existing server colors and up to three
-columns. Extra terminal height goes to graphs and details, not the clocks.
+The dashboard starts with its graphs and satellite sky plot. **Tab** swaps only
+that middle row for server clocks, offset needles and light-distance equivalents;
+press Tab again to return to graphs. The summary and lower server details stay
+in their original positions, using the same 20/40/40 dashboard proportions.
+**q** or **Ctrl-C** quits. The selected middle view persists across resizing.
 
-Three hosts fit with timing boxes at 120x24 or 80x29; six fit at 120x40 or
-80x37. Each box needs at least 38 columns. When all boxes cannot fit while
-leaving six rows each for graphs and details, the original dashboard remains
-visible with a footer giving the required timing geometry. For example, three
-hosts at 80x24 need 76x29; six at 80x24 need 76x37. No partial set is shown.
+Timing cards use server colors and up to three equal columns. At least 38 columns
+and 12 rows per card restore the large segmented clocks and seconds sweep;
+5–11 rows per card use compact ordinary digits. Three hosts have large clocks
+at 120x40, while six use compact cards. Six large clocks fit at 120x64. At
+120x24 three use compact cards and six fall back to graphs. At 80x40 three
+or six use compact cards; at 80x24 both fall back to graphs.
+
+If every card cannot fit, graphs remain in the middle row and the footer reports
+the required **middle-area** dimensions. No partial host set is shown. Enlarging
+the terminal automatically restores the selected timing view; Tab always returns
+to Graphs. Summary and detail panels never shrink to make room for timing cards.
 
 Compact labels: `UTC~` means approximate server UTC, `age` is clock receipt age,
 `RTT` is clock query round-trip time in ms, `Last` is chrony Last offset,
