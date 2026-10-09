@@ -16,8 +16,9 @@ specifies servers as CLI positional arguments.
   panels, and a summary table.
 - Collection over SSH (preferred transport).
 - Runs on Linux and macOS.
-- Approved Timing view: optional SSH host-system UTC estimates, chrony Last
-  offset instruments and light-distance equivalents; Tab retains the dashboard.
+- Approved integrated timing boxes: optional SSH host-system UTC estimates,
+  chrony Last offset instruments and light-distance equivalents alongside the
+  existing dashboard.
 
 **Confirmed out of scope:**
 - TimeClick serial/USB support (potential future extension; not current scope).
@@ -202,7 +203,7 @@ Do not invent policy for them.
 | 7 | SSH library/executable selection and connection management details | Planner in approved plan |
 | 8 | Optional horizon/sky-view satellite display | User product decision |
 | 9 | Exact gpsd and chrony telemetry field inventory, units, and mappings | **Resolved** — live-verified against pi@ntp1/ntp2/ntp3; all fields populated in production. |
-| 10 | Refresh frequency, reconnect/backoff behavior, stale-data handling | **Timing view narrowly resolved (Plan 012):** optional SSH date capture times out after 2 s; independent clock/NTP monotonic receipt ages are fresh through 5 s only with status Ok. Failed date capture marks clock unavailable without disabling NTP/GPS; stale/offline samples suppress live digits, sweep and needle. Existing 250 ms repaint, 1 s poll sleep, reconnect/history/global-staleness policies remain unchanged and broadly open. |
+| 10 | Refresh frequency, reconnect/backoff behavior, stale-data handling | **Timing boxes narrowly resolved (Plans 012–013):** optional SSH date capture times out after 2 s; independent clock/NTP monotonic receipt ages are fresh through 5 s only with status Ok. Failed date capture marks clock unavailable without disabling NTP/GPS; stale/offline samples suppress live digits and needle. Existing 250 ms repaint, 1 s poll sleep, reconnect/history/global-staleness policies remain unchanged and broadly open. |
 | 11 | Test coverage thresholds, platform test matrix, CI configuration | User via coordinator |
 | 12 | Documentation/versioning/changelog/release conventions | User via coordinator |
 | 13 | Dependency admission policy and license rules | User via coordinator |

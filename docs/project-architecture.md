@@ -143,7 +143,7 @@ structural changes.
 `src/ui/` is an equally valid alternative to `src/render/`. The planner chooses
 one and records it in the approved plan.
 
-## Approved Timing View Ownership (Plan 012)
+## Approved Integrated Timing Ownership (Plans 012–013)
 
 - `src/ingest/clock.rs` detects optional `date +%s.%N` support over the existing
   SSH session, validates integer epoch nanoseconds and normalizes capture midpoint,
@@ -155,11 +155,12 @@ one and records it in the approved plan.
 - `src/model/server.rs` owns the latest optional capture and NTP provenance and
   receipt timestamp. Pure projection/freshness helpers receive explicit monotonic
   time; model and widgets never acquire clocks themselves.
-- `src/render/mod.rs` owns dashboard composition and Timing/Dashboard dispatch,
-  including the controls footer. `src/render/clocks.rs` reads model snapshots
-  for responsive cards, segmented UTC digits, sweep, offset and light equivalent.
-- `src/app.rs` owns view selection/Tab input and obtains one monotonic timestamp
-  per draw. It delegates widget composition to the render entry point.
+- `src/render/mod.rs` owns the single dashboard composition, timing-strip sizing,
+  dashboard-first small-terminal fallback and controls/geometry footer.
+  `src/render/clocks.rs` reads model snapshots for five-row cards with ordinary
+  UTC digits, offset needles, light equivalents and independent receipt ages.
+- `src/app.rs` owns quit/resize input and obtains one monotonic timestamp per
+  draw. It delegates widget composition to the render entry point.
 
 ## Concurrency Model (Planning Decisions)
 

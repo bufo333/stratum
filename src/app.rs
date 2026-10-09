@@ -71,7 +71,6 @@ pub async fn run(cli: Cli) -> Result<()> {
 async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cli) -> Result<()> {
     // Build model.
     let mut model = Model::new(cli.servers.clone());
-    let mut view = render::View::Timing;
 
     // Bounded mpsc channel: one Sender per ingest task, single Receiver here.
     let (tx, mut rx) = mpsc::channel::<ServerUpdate>(CHANNEL_CAPACITY);
@@ -107,7 +106,7 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
         // Draw
         // -----------------------------------------------------------------------
         let now = Instant::now();
-        terminal.draw(|f| render::draw(f, &model, view, now))?;
+        terminal.draw(|f| render::draw(f, &model, now))?;
 
         // -----------------------------------------------------------------------
         // Wait for next event or timeout (poll blocks for up to REPAINT_INTERVAL).
@@ -115,7 +114,7 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
         if crossterm::event::poll(REPAINT_INTERVAL)? {
             match event::read()? {
                 Event::Key(key) => {
-                    if handle_key(key, &mut view) {
+                    if handle_key(key) {
                         return Ok(());
                     }
                 }
@@ -133,14 +132,10 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
     }
 }
 
-fn handle_key(key: KeyEvent, view: &mut render::View) -> bool {
+fn handle_key(key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Char('q') => true,
         KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => true,
-        KeyCode::Tab => {
-            *view = view.toggled();
-            false
-        }
         _ => false,
     }
 }
@@ -149,25 +144,19 @@ fn handle_key(key: KeyEvent, view: &mut render::View) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn controls_reach_both_views_and_quit() {
-        let mut view = render::View::Timing;
-        assert!(!handle_key(
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
-            &mut view
-        ));
-        assert_eq!(view, render::View::Dashboard);
-        assert!(!handle_key(
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
-            &mut view
-        ));
-        assert_eq!(view, render::View::Timing);
-        assert!(handle_key(
-            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-            &mut view
-        ));
-        assert!(handle_key(
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            &mut view
-        ));
+    fn controls_ignore_tab_and_quit() {
+        assert!(!handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        assert!(handle_key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE
+        )));
+        assert!(handle_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!handle_key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE
+        )));
     }
 }

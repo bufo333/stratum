@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -72,7 +72,7 @@ fn needle(offset: Option<f64>, width: usize) -> String {
 
 fn age_text(at: Option<Instant>, now: Instant) -> String {
     sample_age(at, now)
-        .map(|age| format!("{:.1}s", age.as_secs_f64()))
+        .map(|age| format!("{}s", compact_number(age.as_secs_f64(), 1, 4)))
         .unwrap_or_else(|| "n/a".into())
 }
 
@@ -86,67 +86,57 @@ fn utc(epoch_ns: u64) -> String {
     )
 }
 
-fn segmented(text: &str) -> [String; 3] {
-    const DIGITS: [[&str; 3]; 10] = [
-        [" _ ", "| |", "|_|"],
-        ["   ", "  |", "  |"],
-        [" _ ", " _|", "|_ "],
-        [" _ ", " _|", " _|"],
-        ["   ", "|_|", "  |"],
-        [" _ ", "|_ ", " _|"],
-        [" _ ", "|_ ", "|_|"],
-        [" _ ", "  |", "  |"],
-        [" _ ", "|_|", "|_|"],
-        [" _ ", "|_|", " _|"],
-    ];
-    std::array::from_fn(|row| {
-        text.chars()
-            .map(|c| match c.to_digit(10) {
-                Some(n) => DIGITS[n as usize][row],
-                None if c == ':' => [" ", ".", "."][row],
-                _ => ["   ", " _ ", "   "][row],
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    })
-}
-
-pub fn render(f: &mut Frame, area: Rect, model: &Model, now: Instant) {
-    let columns = if area.width >= 114 {
-        3
-    } else if area.width >= 76 {
-        2
-    } else {
-        1
-    };
-    let rows = (model.server_count().max(1) as u16).div_ceil(columns);
-    if area.width < 38 || area.height / rows < 7 {
-        f.render_widget(
-            Paragraph::new(format!(
-                "Resize: {}x{} needed\n{} servers (including footer)",
-                38 * columns,
-                7 * rows + 1,
-                model.server_count()
-            )),
-            area,
-        );
+/// Fixed five-row cards; unused slots in the last row retain equal widths.
+pub fn render(f: &mut Frame, area: Rect, model: &Model, columns: u16, now: Instant) {
+    if columns == 0 {
         return;
     }
     let width = area.width / columns;
-    let height = area.height / rows;
     for (index, server) in model.servers().iter().enumerate() {
         let index = index as u16;
         card(
             f,
             Rect::new(
                 area.x + index % columns * width,
-                area.y + index / columns * height,
+                area.y + index / columns * 5,
                 width,
-                height,
+                5,
             ),
             server,
             now,
         );
+    }
+}
+
+// Bound numbers before composing lines so signs, units and status never clip.
+fn compact_number(value: f64, precision: usize, budget: usize) -> String {
+    let fixed = format!("{value:.precision$}");
+    if fixed.len() <= budget {
+        fixed
+    } else {
+        format!("{value:.0e}")
+    }
+}
+
+fn compact_offset(offset: Option<f64>) -> String {
+    let full = offset_text(offset).replace(' ', "");
+    if full.len() <= 10 {
+        return full;
+    }
+    match offset.filter(|v| v.is_finite()) {
+        Some(v) => format!("{}{v:+.0e}s", if v < 0.0 { "<" } else { ">" }),
+        None => "n/a".into(),
+    }
+}
+
+fn compact_distance(offset: Option<f64>) -> String {
+    let full = distance_text(offset).replace(' ', "");
+    if full.len() <= 9 {
+        return full;
+    }
+    match light_distance(offset) {
+        Some(m) => format!("{}km", compact_number(m / 1000.0, 3, 7)),
+        None => "n/a".into(),
     }
 }
 
@@ -177,76 +167,42 @@ fn card(f: &mut Frame, area: Rect, server: &ServerState, now: Instant) {
         ServerStatus::Ok if epoch.is_none() => "STALE",
         ServerStatus::Ok => "",
     };
-    let time = epoch.map(utc).unwrap_or_else(|| "--:--:--".into());
+    let time = epoch
+        .map(utc)
+        .unwrap_or_else(|| format!("-- {clock_status}"));
     let offset = server.timing_offset(now);
     let ntp_age = age_text(server.ntp_received_at(), now);
-    let ntp_state = if server.status() == ServerStatus::Unreachable
-        || server.status() == ServerStatus::Connecting
-    {
-        " OFFLINE"
-    } else if server.ntp_received_at().is_some()
-        && !is_fresh(server.status(), server.ntp_received_at(), now)
-    {
-        " STALE"
-    } else {
-        ""
+    let ntp_state = match server.status() {
+        ServerStatus::Connecting | ServerStatus::Unreachable => "OFFLINE",
+        ServerStatus::Stale => "STALE",
+        ServerStatus::Ok
+            if server.ntp_received_at().is_some()
+                && !is_fresh(server.status(), server.ntp_received_at(), now) =>
+        {
+            "STALE"
+        }
+        _ => "",
     };
     let clock_age = age_text(sample.map(|s| s.received_at), now);
     let rtt = sample
-        .map(|s| format!("{:.0}", s.rtt.as_secs_f64() * 1000.0))
+        .map(|s| format!("{}ms", compact_number(s.rtt.as_secs_f64() * 1000.0, 0, 4)))
         .unwrap_or_else(|| "n/a".into());
-    let leap = server
-        .latest_ntp()
-        .and_then(|s| s.leap_status.as_deref())
-        .unwrap_or("unknown");
-    let mut lines: Vec<Line> = Vec::new();
-    if area.height >= 12 {
-        lines.push(Line::from(format!(
-            "Server UTC ~ age {clock_age} RTT {rtt}ms"
-        )));
-        for row in segmented(&time) {
-            lines.push(Line::styled(row, style.add_modifier(Modifier::BOLD)));
-        }
-        let sweep = match epoch {
-            Some(ns) => {
-                let position = ((ns % 60_000_000_000) as u128 * 24 / 60_000_000_000) as usize;
-                let mut ticks = vec!['.'; 24];
-                ticks[position] = '*';
-                format!("SEC [{}]", ticks.into_iter().collect::<String>())
-            }
-            None => format!("--:--:-- {clock_status}"),
-        };
-        lines.push(Line::from(sweep));
-        lines.push(Line::from("-1 us          0          +1 us"));
-        lines.push(Line::styled(needle(offset, 30), style));
-        lines.push(Line::from(format!(
-            "Last offset {}{ntp_state}",
-            offset_text(offset)
-        )));
-        lines.push(Line::from(format!("Light equiv {}", distance_text(offset))));
-        lines.push(Line::from(format!("NTP age {ntp_age} Leap {leap}")));
+    let last = if ntp_state.is_empty() {
+        compact_offset(offset)
     } else {
-        lines.push(Line::styled(
-            format!("Server UTC ~ {time} {clock_status}"),
+        ntp_state.into()
+    };
+    let lines = vec![
+        Line::styled(format!("UTC~{time} age{clock_age} RTT{rtt}"), style),
+        Line::from(format!(
+            "Last {last} Light equiv {}",
+            compact_distance(offset)
+        )),
+        Line::styled(
+            format!("-1us [{}] +1us NTP{ntp_age}", needle(offset, 7)),
             style,
-        ));
-        lines.push(Line::from(format!(
-            "age {clock_age} RTT {rtt}ms | NTP {ntp_age}"
-        )));
-        lines.push(Line::styled(
-            format!("-1us [{}] +1us (0 mid)", needle(offset, 11)),
-            style,
-        ));
-        lines.push(Line::from(format!(
-            "Last offset {}{ntp_state}",
-            offset_text(offset)
-        )));
-        lines.push(Line::from(format!("Light equiv {}", distance_text(offset))));
-        // Optional rows preserve leap details when the compact card has room.
-        if inner.height >= 6 {
-            lines.push(Line::from(format!("NTP age {ntp_age} Leap {leap}")));
-        }
-    }
+        ),
+    ];
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -254,7 +210,7 @@ fn card(f: &mut Frame, area: Rect, server: &ServerState, now: Instant) {
 mod tests {
     use super::*;
     use crate::model::{ClockSample, NtpProvenance, NtpSample, ServerUpdate};
-    use crate::render::{draw, View};
+    use crate::render::draw;
     use ratatui::{backend::TestBackend, Terminal};
     use std::time::Duration;
 
@@ -290,9 +246,9 @@ mod tests {
         model
     }
 
-    fn screen(model: &Model, width: u16, height: u16, now: Instant, view: View) -> String {
+    fn screen(model: &Model, width: u16, height: u16, now: Instant) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, model, view, now)).unwrap();
+        terminal.draw(|f| draw(f, model, now)).unwrap();
         let buffer = terminal.backend().buffer();
         (0..height)
             .map(|y| {
@@ -335,67 +291,203 @@ mod tests {
     #[test]
     fn synthetic_render_matrix() {
         let now = Instant::now();
-        for n in [1, 3, 6] {
-            for (width, height) in [(120, 40), (80, 24), (120, 24)] {
-                let model = fixture(n, now);
-                let output = screen(&model, width, height, now, View::Timing);
-                for index in 0..n {
-                    assert!(output.contains(&format!("synthetic-{index}")));
-                }
-                for label in [
-                    "Server UTC ~",
-                    "Last offset",
-                    "Light equiv",
-                    "us",
-                    " m",
-                    "RTT",
-                    "age",
-                    "Tab:",
-                ] {
-                    assert!(
-                        output.contains(label),
-                        "{n} {width}x{height}: {label}\n{output}"
-                    );
-                }
-                // Run with --nocapture to inspect synthetic terminal buffers.
-                println!("SYNTHETIC {n} hosts {width}x{height}\n{output}");
+        for (n, width, height) in [
+            (1, 120, 24),
+            (1, 120, 40),
+            (3, 120, 24),
+            (3, 120, 40),
+            (6, 120, 40),
+            (3, 80, 29),
+            (6, 80, 37),
+            (2, 79, 26),
+            (4, 119, 34),
+            (5, 121, 34),
+        ] {
+            let output = screen(&fixture(n, now), width, height, now);
+            assert_eq!(output.matches("UTC~").count(), n, "{output}");
+            assert_eq!(output.matches("Light equiv").count(), n, "{output}");
+            for label in [
+                "Server Summary",
+                "NTP Offset",
+                "NTP Frequency",
+                "Sky (all servers)",
+                "NTP/Chrony",
+                "GPS",
+                "Unsynchronised",
+                "q: quit",
+            ] {
+                assert!(
+                    output.contains(label),
+                    "{n} {width}x{height}: {label}\n{output}"
+                );
             }
+            assert!(!output.contains("Tab:"));
+            println!("SYNTHETIC {n} hosts {width}x{height}\n{output}");
         }
     }
 
     #[test]
-    fn degraded_states_resize_and_dashboard() {
+    fn long_names_keep_equal_slots_and_fixed_card_height() {
+        let now = Instant::now();
+        let model = Model::new(
+            (0..5)
+                .map(|i| format!("{i}-{}", "long-host-".repeat(20)))
+                .collect(),
+        );
+        for height in [32, 40, 60] {
+            let output = screen(&model, 119, height, now);
+            let rows: Vec<_> = output.lines().collect();
+            assert_eq!(output.matches("UTC~").count(), 5);
+            assert_eq!(output.matches("Leap unknown").count(), 5);
+            // Summary is 8 rows, then two 5-row strips. Extra height goes below.
+            assert_eq!(rows[9].matches("UTC~").count(), 3);
+            assert_eq!(rows[14].matches("UTC~").count(), 2);
+            assert!(rows[18].contains("NTP Offset"));
+            assert!(rows[14].chars().skip(78).all(|c| c == ' '));
+        }
+    }
+
+    #[test]
+    fn dashboard_first_fallback_and_tiny_areas() {
+        let now = Instant::now();
+        for (n, w, h, hint) in [
+            (3, 80, 24, "76x29"),
+            (6, 80, 24, "76x37"),
+            (6, 120, 24, "114x32"),
+        ] {
+            let output = screen(&fixture(n, now), w, h, now);
+            assert!(output.contains(hint), "{output}");
+            assert!(!output.contains("UTC~"));
+            for label in [
+                "Server Summary",
+                "NTP Offset",
+                "Sky (all servers)",
+                "NTP/Chrony",
+                "GPS",
+            ] {
+                assert!(output.contains(label), "{label}\n{output}");
+            }
+            println!("SYNTHETIC fallback {n} hosts {w}x{h}\n{output}");
+        }
+        for n in [0, 1, 6] {
+            for (w, h) in [(0, 0), (1, 1), (10, 2), (37, 24)] {
+                let _ = screen(&fixture(n, now), w, h, now);
+            }
+        }
+    }
+
+    fn card_screen(model: &Model, now: Instant) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(38, 5)).unwrap();
+        terminal
+            .draw(|f| card(f, f.area(), &model.servers()[0], now))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..5)
+            .map(|y| (0..38).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn compact_quality_states_and_independent_recovery() {
         let now = Instant::now();
         let mut model = fixture(1, now);
-        let output = screen(&model, 40, 12, now, View::Timing);
-        assert!(output.contains("Unsynchronised"));
-        let stale = screen(&model, 40, 12, now + Duration::from_secs(6), View::Timing);
-        assert!(stale.contains("STALE"));
+        let boundary = now + Duration::from_secs(5);
+        let fresh = card_screen(&model, boundary);
+        assert!(fresh.contains("12:35:01"));
+        assert!(fresh.contains("+0.100us"));
+        assert!(fresh.contains("Unsynchronised"));
+        let stale = card_screen(&model, boundary + Duration::from_nanos(1));
+        assert!(stale.contains("UTC~-- STALE"));
+        assert!(stale.contains("Last STALE Light equiv n/a"));
         assert!(!stale.contains('^'));
-        assert!(!stale.contains("SEC ["));
-        assert!(stale.contains("6.0s"));
         model.apply(ServerUpdate::ClockResult {
             index: 0,
             sample: None,
         });
-        let unavailable = screen(&model, 40, 12, now, View::Timing);
-        assert!(unavailable.contains("unavailable"));
-        assert!(unavailable.contains("+0.100 us"));
+        let failed = card_screen(&model, now);
+        assert!(failed.contains("unavailable"));
+        assert!(failed.contains("+0.100us"));
+        model.apply(ServerUpdate::ClockResult {
+            index: 0,
+            sample: Some(ClockSample {
+                epoch_ns: 0,
+                midpoint: boundary,
+                received_at: boundary,
+                rtt: Duration::from_millis(1),
+            }),
+        });
+        let recovered = card_screen(&model, boundary + Duration::from_secs(1));
+        assert!(recovered.contains("00:00:01"));
+        assert!(recovered.contains("Last STALE"));
+        assert!(recovered.contains("age1.0s"));
+        assert!(recovered.contains("NTP6.0s"));
+        for status in [
+            ServerStatus::Unreachable,
+            ServerStatus::Connecting,
+            ServerStatus::Stale,
+        ] {
+            model.apply(ServerUpdate::StatusChange { index: 0, status });
+            let output = card_screen(&model, now);
+            assert!(output.contains(if status == ServerStatus::Stale {
+                "STALE"
+            } else {
+                "OFFLINE"
+            }));
+            assert!(!output.contains('^'));
+        }
+        let mut sample = model.servers()[0].latest_ntp().unwrap().clone();
+        sample.provenance = NtpProvenance::NtpqPeer;
+        sample.leap_status = None;
         model.apply(ServerUpdate::StatusChange {
             index: 0,
             status: ServerStatus::Unreachable,
         });
-        assert!(screen(&model, 40, 12, now, View::Timing).contains("OFFLINE"));
-        let resize = screen(&fixture(6, now), 80, 21, now, View::Timing);
-        assert!(resize.contains("76x22"));
-        for (w, h) in [(0, 0), (1, 1), (10, 2), (37, 24)] {
-            let _ = screen(&model, w, h, now, View::Timing);
+        model.apply(ServerUpdate::NtpSample {
+            index: 0,
+            received_at: now,
+            sample,
+        });
+        let ntpq = card_screen(&model, now);
+        assert!(ntpq.contains("Last n/a Light equiv n/a"));
+        assert!(ntpq.contains("Leap unknown"));
+    }
+
+    #[test]
+    fn compact_extremes_preserve_units_signs_and_markers() {
+        let now = Instant::now();
+        let mut model = fixture(1, now);
+        for value in [2e-6, -2e-6, 0.999999, -0.999999, 1e100, -1e100, f64::MAX] {
+            let mut sample = model.servers()[0].latest_ntp().unwrap().clone();
+            sample.offset_sec = Some(value);
+            model.apply(ServerUpdate::NtpSample {
+                index: 0,
+                received_at: now,
+                sample,
+            });
+            let output = card_screen(&model, now);
+            let line = output.lines().nth(2).unwrap();
+            assert!(line.contains(&compact_offset(Some(value))), "{output}");
+            assert!(line.contains(&compact_distance(Some(value))), "{output}");
+            assert!(line.contains(if value < 0.0 { "<-" } else { ">+" }));
         }
+        model.apply(ServerUpdate::ClockResult {
+            index: 0,
+            sample: Some(ClockSample {
+                epoch_ns: 0,
+                midpoint: now,
+                received_at: now,
+                rtt: Duration::MAX,
+            }),
+        });
+        assert!(card_screen(&model, now).contains("RTT2e22ms"));
+        let later = now + Duration::from_secs(1_000_000_000);
+        let output = card_screen(&model, later);
+        assert!(output.contains("age1e9s RTT2e22ms"), "{output}");
+        assert!(output.contains("NTP1e9s"));
         let long = Model::new(vec!["long-hostname-".repeat(20)]);
-        assert!(screen(&long, 38, 8, now, View::Timing).contains("Server UTC ~"));
-        let dashboard = screen(&fixture(3, now), 120, 40, now, View::Dashboard);
-        for label in ["Host", "Offset", "GPS Fix", "synthetic-0", "Tab:"] {
-            assert!(dashboard.contains(label));
-        }
+        let output = card_screen(&long, now);
+        assert!(output.contains("UTC~-- OFFLINE"));
+        assert!(output.contains("Leap unknown"));
     }
 }

@@ -16,7 +16,7 @@ servers.
 ## Features
 
 - Monitors 1–6 servers simultaneously.
-- Timing console with segmented server clocks, offset needles and light-distance equivalents.
+- Compact server clocks, offset needles and light-distance equivalents within the dashboard.
 - Combined color-coded graphs (one line per server per metric) with axis scales.
 - Per-server detail panels.
 - Summary table across all servers.
@@ -68,13 +68,26 @@ trmnlapp pi@ntp1 pi@ntp2 pi@ntp3
 
 ## Timing console
 
-The app starts in Timing view. **Tab** switches between Timing and the original
-Dashboard; **q** or **Ctrl-C** quits. Cards use the existing server colors, up to
-three columns. Taller cards show segmented digits and a seconds sweep; compact
-cards show ordinary digits. If all servers cannot fit, a resize hint gives the
-required terminal geometry. Six hosts fit in 80x24 (compact) or 120x40.
+The dashboard includes small, five-row timing boxes below the summary, alongside
+its existing graphs, satellite sky plot and server details. **q** or **Ctrl-C**
+quits; Tab has no action. Boxes use existing server colors and up to three
+columns. Extra terminal height goes to graphs and details, not the clocks.
 
-**Server UTC ~** estimates the host's system clock using an optional read-only
+Three hosts fit with timing boxes at 120x24 or 80x29; six fit at 120x40 or
+80x37. Each box needs at least 38 columns. When all boxes cannot fit while
+leaving six rows each for graphs and details, the original dashboard remains
+visible with a footer giving the required timing geometry. For example, three
+hosts at 80x24 need 76x29; six at 80x24 need 76x37. No partial set is shown.
+
+Compact labels: `UTC~` means approximate server UTC, `age` is clock receipt age,
+`RTT` is clock query round-trip time in ms, `Last` is chrony Last offset,
+`Light equiv` is equivalent distance, and `NTP` is independent NTP receipt age.
+Ages use seconds (`s`), offsets use microseconds (`us`) or seconds, and distances
+use metres (`m`) or kilometres (`km`). Large values use scientific notation.
+Leap status appears in the bottom border; stale/offline/unavailable states
+replace live numbers. The needle's center marks zero (covered by `^` at zero).
+
+**UTC~** estimates the host's system clock using an optional read-only
 SSH `date +%s.%N` command. GNU-compatible output must contain unsigned epoch
 seconds and exactly nine fractional digits. Availability on your servers is
 unverified until a successful runtime response; unsupported output or a query
@@ -89,7 +102,7 @@ is not an accuracy bound, a precision NTP query, or chronyd's virtual NTP clock;
 printing nanoseconds does not establish nanosecond accuracy. Remote clock steps
 may visibly jump; the view does not smooth them away.
 
-**Last offset** comes only from chrony tracking. Positive/right means the local
+**Last** comes only from chrony tracking. Positive/right means the local
 clock was ahead of its sources at that update. Every needle uses the same
 **±1 us** range, with zero at the midpoint. Over-range values show `<` or `>`
 and retain the numeric offset. `ntpq` fallback shows Last offset n/a here and
@@ -103,7 +116,7 @@ is not measured range, position error, signal travel time or satellite relativit
 
 Clock and NTP receipt ages are independent. Each remains fresh for at most
 five seconds while the server status is OK. Older or disconnected samples show
-STALE/OFFLINE and placeholders; the sweep and needle stop displaying live data.
+STALE/OFFLINE and placeholders; the clock digits and needle stop displaying live data.
 GPS updates do not refresh these ages. Clock capture failure hides the clock
 without hiding fresh chrony metrics. NTP age measures collection receipt, not
 the age of chrony's underlying reference measurement.

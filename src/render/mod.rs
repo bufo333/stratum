@@ -86,54 +86,62 @@ use ratatui::{
 };
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
-    Timing,
-    Dashboard,
-}
-impl View {
-    pub fn toggled(self) -> Self {
-        match self {
-            Self::Timing => Self::Dashboard,
-            Self::Dashboard => Self::Timing,
-        }
-    }
+/// Timing geometry includes the summary, both existing areas, and footer.
+fn timing_geometry(count: usize, width: u16) -> (u16, u16, u16) {
+    let count = count.max(1) as u16;
+    let columns = count.min(3).min((width / 38).max(1));
+    (
+        columns,
+        columns * 38,
+        count + 3 + count.div_ceil(columns) * 5 + 12 + 1,
+    )
 }
 
-pub fn draw(f: &mut ratatui::Frame, model: &Model, view: View, now: Instant) {
+pub fn draw(f: &mut ratatui::Frame, model: &Model, now: Instant) {
     let area = f.area();
     let body = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-    match view {
-        View::Timing => clocks::render(f, body, model, now),
-        View::Dashboard => dashboard(f, body, model),
-    }
+    let (columns, required_width, required_height) =
+        timing_geometry(model.server_count(), area.width);
+    let visible = area.width >= required_width && area.height >= required_height;
+    let (summary, graphs, details) = if visible {
+        let summary_height = model.server_count() as u16 + 3;
+        let timing_height = (model.server_count().max(1) as u16).div_ceil(columns) * 5;
+        let remaining = body.height - summary_height - timing_height;
+        let chunks = Layout::vertical([
+            Constraint::Length(summary_height),
+            Constraint::Length(timing_height),
+            Constraint::Length(remaining / 2),
+            Constraint::Length(remaining - remaining / 2),
+        ])
+        .split(body);
+        clocks::render(f, chunks[1], model, columns, now);
+        (chunks[0], chunks[2], chunks[3])
+    } else {
+        let chunks = Layout::vertical([
+            Constraint::Percentage(20),
+            Constraint::Percentage(40),
+            Constraint::Percentage(40),
+        ])
+        .split(body);
+        (chunks[0], chunks[1], chunks[2])
+    };
+    dashboard(f, summary, graphs, details, model);
     if area.height > 0 {
+        let footer = if visible {
+            "q: quit".to_owned()
+        } else {
+            format!("q: quit | Timing needs {required_width}x{required_height}")
+        };
         f.render_widget(
-            Paragraph::new("Tab: dashboard / timing   q: quit"),
+            Paragraph::new(footer),
             Rect::new(area.x, area.bottom() - 1, area.width, 1),
         );
     }
 }
 
-/// Build and render the TUI layout from a model snapshot.
-///
-/// Layout (top → bottom):
-///   - Summary table (20% height)
-///   - Graphs area (40% height): offset (~34%) | freq (~33%) | sky plot (~33%)
-///   - Server panels (40% height): one panel per server
-fn dashboard(f: &mut ratatui::Frame, size: Rect, model: &Model) {
-    // Top-level vertical split.
-    let top_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(40),
-            Constraint::Percentage(40),
-        ])
-        .split(size);
-
-    // Summary table.
-    table::render_summary_table(f, top_chunks[0], model);
+/// Original dashboard widgets retain their content and horizontal arrangement.
+fn dashboard(f: &mut ratatui::Frame, summary: Rect, graphs: Rect, details: Rect, model: &Model) {
+    table::render_summary_table(f, summary, model);
 
     // Graphs: offset | freq | sky plot.
     let graph_chunks = Layout::default()
@@ -143,7 +151,7 @@ fn dashboard(f: &mut ratatui::Frame, size: Rect, model: &Model) {
             Constraint::Percentage(33),
             Constraint::Percentage(33),
         ])
-        .split(top_chunks[1]);
+        .split(graphs);
 
     graphs::render_offset_graph(f, graph_chunks[0], model);
     graphs::render_freq_graph(f, graph_chunks[1], model);
@@ -157,7 +165,7 @@ fn dashboard(f: &mut ratatui::Frame, size: Rect, model: &Model) {
     let panel_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(panel_constraints)
-        .split(top_chunks[2]);
+        .split(details);
 
     for (i, server) in model.servers().iter().enumerate() {
         if let Some(chunk) = panel_chunks.get(i) {
