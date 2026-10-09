@@ -1,3 +1,4 @@
+pub mod clock;
 pub mod gpsd;
 pub mod ntp;
 pub mod ssh;

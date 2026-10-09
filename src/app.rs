@@ -4,7 +4,7 @@
 //! It owns the `Model` and is the sole consumer of `ServerUpdate` messages.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::{
@@ -14,11 +14,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    Terminal,
-};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -75,6 +71,7 @@ pub async fn run(cli: Cli) -> Result<()> {
 async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cli) -> Result<()> {
     // Build model.
     let mut model = Model::new(cli.servers.clone());
+    let mut view = render::View::Timing;
 
     // Bounded mpsc channel: one Sender per ingest task, single Receiver here.
     let (tx, mut rx) = mpsc::channel::<ServerUpdate>(CHANNEL_CAPACITY);
@@ -109,23 +106,18 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
         // -----------------------------------------------------------------------
         // Draw
         // -----------------------------------------------------------------------
-        terminal.draw(|f| draw(f, &model))?;
+        let now = Instant::now();
+        terminal.draw(|f| render::draw(f, &model, view, now))?;
 
         // -----------------------------------------------------------------------
         // Wait for next event or timeout (poll blocks for up to REPAINT_INTERVAL).
         // -----------------------------------------------------------------------
         if crossterm::event::poll(REPAINT_INTERVAL)? {
             match event::read()? {
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('q'),
-                    ..
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                }) => {
-                    return Ok(());
+                Event::Key(key) => {
+                    if handle_key(key, &mut view) {
+                        return Ok(());
+                    }
                 }
                 Event::Resize(_, _) => {
                     // Force a redraw on the next iteration.
@@ -141,81 +133,41 @@ async fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cl
     }
 }
 
-/// Build and render the TUI layout from a model snapshot.
-///
-/// Layout (top → bottom):
-///   - Summary table (20% height)
-///   - Graphs area (40% height): offset (~34%) | freq (~33%) | sky plot (~33%)
-///   - Server panels (40% height): one panel per server
-fn draw(f: &mut ratatui::Frame, model: &Model) {
-    let size = f.area();
-
-    // Top-level vertical split.
-    let top_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(40),
-            Constraint::Percentage(40),
-        ])
-        .split(size);
-
-    // Summary table.
-    render::table::render_summary_table(f, top_chunks[0], model);
-
-    // Graphs: offset | freq | sky plot.
-    let graph_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
-        .split(top_chunks[1]);
-
-    render::graphs::render_offset_graph(f, graph_chunks[0], model);
-    render::graphs::render_freq_graph(f, graph_chunks[1], model);
-    render::skyplot::render_sky_plot(f, graph_chunks[2], model);
-
-    // Server panels: one per server, evenly distributed.
-    let n = model.server_count().max(1);
-    let panel_constraints: Vec<Constraint> =
-        (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect();
-
-    let panel_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(panel_constraints)
-        .split(top_chunks[2]);
-
-    for (i, server) in model.servers().iter().enumerate() {
-        if let Some(chunk) = panel_chunks.get(i) {
-            render::panels::render_server_panel(f, *chunk, server);
+fn handle_key(key: KeyEvent, view: &mut render::View) -> bool {
+    match key.code {
+        KeyCode::Char('q') => true,
+        KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => true,
+        KeyCode::Tab => {
+            *view = view.toggled();
+            false
         }
+        _ => false,
     }
-}
-
-/// Detect whether a server's NTP data has gone stale.
-///
-/// Extracted as a pure helper to allow unit testing without a running loop.
-/// Returns `true` if the history ring buffer is non-empty but the ring buffer
-/// has not grown in `threshold` samples worth of time — this is a simplified
-/// heuristic; a real implementation would compare wall-clock timestamps on
-/// samples.
-#[allow(dead_code)]
-pub fn is_stale(_sample_count_a: usize, _sample_count_b: usize) -> bool {
-    // Placeholder: stale detection is driven by the orchestration loop
-    // comparing sample timestamps.  Returns false until timestamps are added
-    // to `NtpSample` (contract Q10 pending).
-    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn is_stale_placeholder() {
-        assert!(!is_stale(0, 0));
-        assert!(!is_stale(5, 3));
+    fn controls_reach_both_views_and_quit() {
+        let mut view = render::View::Timing;
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            &mut view
+        ));
+        assert_eq!(view, render::View::Dashboard);
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            &mut view
+        ));
+        assert_eq!(view, render::View::Timing);
+        assert!(handle_key(
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            &mut view
+        ));
+        assert!(handle_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut view
+        ));
     }
 }

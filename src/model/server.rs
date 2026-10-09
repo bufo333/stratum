@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use super::ring_buffer::RingBuffer;
 
 // ---------------------------------------------------------------------------
@@ -23,13 +25,48 @@ pub enum ServerStatus {
 // NTP / chrony sample
 // ---------------------------------------------------------------------------
 
+/// Receipt freshness for the Timing view only.
+pub const TIMING_FRESHNESS: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NtpProvenance {
+    ChronyTracking,
+    NtpqPeer,
+}
+
+/// Host system clock captured over SSH, associated with a local midpoint.
+#[derive(Debug, Clone)]
+pub struct ClockSample {
+    pub epoch_ns: u64,
+    pub midpoint: Instant,
+    pub received_at: Instant,
+    pub rtt: Duration,
+}
+
+impl ClockSample {
+    pub fn projected_ns(&self, now: Instant) -> Option<u64> {
+        let elapsed = u64::try_from(now.checked_duration_since(self.midpoint)?.as_nanos()).ok()?;
+        self.epoch_ns.checked_add(elapsed)
+    }
+}
+
+pub fn sample_age(received_at: Option<Instant>, now: Instant) -> Option<Duration> {
+    now.checked_duration_since(received_at?)
+}
+
+pub fn is_fresh(status: ServerStatus, received_at: Option<Instant>, now: Instant) -> bool {
+    status == ServerStatus::Ok
+        && sample_age(received_at, now).is_some_and(|age| age <= TIMING_FRESHNESS)
+}
+
 /// One poll result from chrony (or ntpq fallback).
 ///
 /// Fields marked `Option` were not confirmed from static fixture data at plan
 /// time; they render as "n/a" when `None`.
 #[derive(Debug, Clone)]
 pub struct NtpSample {
-    /// System-clock offset from reference (seconds).
+    pub provenance: NtpProvenance,
+    /// Chrony Last offset or ntpq selected-peer offset (seconds); see provenance.
     pub offset_sec: Option<f64>,
     /// RMS offset (seconds).
     pub rms_offset_sec: Option<f64>,
@@ -129,6 +166,12 @@ pub enum ServerUpdate {
         /// Zero-based server index (positional CLI argument order).
         index: usize,
         sample: NtpSample,
+        received_at: Instant,
+    },
+    /// Optional capture; a failure immediately replaces availability.
+    ClockResult {
+        index: usize,
+        sample: Option<ClockSample>,
     },
     /// A fresh GPS snapshot from gpsd.
     GpsSample {
@@ -168,6 +211,8 @@ pub struct ServerState {
     gps_history: RingBuffer<GpsSample>,
     /// Most recently received NTP sample (also the last entry in `ntp_history`).
     latest_ntp: Option<NtpSample>,
+    ntp_received_at: Option<Instant>,
+    clock: Option<ClockSample>,
     /// Most recently received GPS sample.
     latest_gps: Option<GpsSample>,
 }
@@ -182,6 +227,8 @@ impl ServerState {
             ntp_history: RingBuffer::new(),
             gps_history: RingBuffer::new(),
             latest_ntp: None,
+            ntp_received_at: None,
+            clock: None,
             latest_gps: None,
         }
     }
@@ -190,7 +237,8 @@ impl ServerState {
     // Transition helpers (called by Model::apply)
     // -----------------------------------------------------------------------
 
-    pub(super) fn apply_ntp(&mut self, sample: NtpSample) {
+    pub(super) fn apply_ntp(&mut self, sample: NtpSample, received_at: Instant) {
+        self.ntp_received_at = Some(received_at);
         self.latest_ntp = Some(sample.clone());
         self.ntp_history.push(sample);
         if self.status == ServerStatus::Connecting || self.status == ServerStatus::Unreachable {
@@ -210,6 +258,29 @@ impl ServerState {
     // -----------------------------------------------------------------------
     // Read-only accessors
     // -----------------------------------------------------------------------
+
+    pub(super) fn apply_clock(&mut self, sample: Option<ClockSample>) {
+        self.clock = sample;
+    }
+
+    pub fn clock(&self) -> Option<&ClockSample> {
+        self.clock.as_ref()
+    }
+
+    pub fn ntp_received_at(&self) -> Option<Instant> {
+        self.ntp_received_at
+    }
+
+    pub fn timing_offset(&self, now: Instant) -> Option<f64> {
+        if !is_fresh(self.status, self.ntp_received_at, now) {
+            return None;
+        }
+        let sample = self.latest_ntp()?;
+        if sample.provenance != NtpProvenance::ChronyTracking {
+            return None;
+        }
+        sample.offset_sec.filter(|value| value.is_finite())
+    }
 
     pub fn status(&self) -> ServerStatus {
         self.status
@@ -243,6 +314,7 @@ mod tests {
 
     fn sample_ntp() -> NtpSample {
         NtpSample {
+            provenance: NtpProvenance::ChronyTracking,
             offset_sec: Some(0.0001),
             rms_offset_sec: Some(0.00005),
             freq_ppm: Some(-3.1),
@@ -279,7 +351,7 @@ mod tests {
     #[test]
     fn apply_ntp_transitions_to_ok() {
         let mut s = ServerState::new("host1".into(), 0);
-        s.apply_ntp(sample_ntp());
+        s.apply_ntp(sample_ntp(), Instant::now());
         assert_eq!(s.status(), ServerStatus::Ok);
         assert!(s.latest_ntp().is_some());
         assert_eq!(s.ntp_history().len(), 1);
@@ -289,7 +361,7 @@ mod tests {
     fn apply_ntp_after_unreachable_recovers_to_ok() {
         let mut s = ServerState::new("host1".into(), 0);
         s.set_status(ServerStatus::Unreachable);
-        s.apply_ntp(sample_ntp());
+        s.apply_ntp(sample_ntp(), Instant::now());
         assert_eq!(s.status(), ServerStatus::Ok);
     }
 
@@ -305,7 +377,7 @@ mod tests {
     fn ntp_history_grows() {
         let mut s = ServerState::new("h".into(), 0);
         for _ in 0..5 {
-            s.apply_ntp(sample_ntp());
+            s.apply_ntp(sample_ntp(), Instant::now());
         }
         assert_eq!(s.ntp_history().len(), 5);
     }
@@ -320,8 +392,68 @@ mod tests {
         // it does NOT unexpectedly reset here.
         // The rule: apply_ntp transitions Connecting|Unreachable → Ok.
         assert_eq!(s.status(), ServerStatus::Stale);
-        s.apply_ntp(sample_ntp());
+        s.apply_ntp(sample_ntp(), Instant::now());
         // Stale is NOT Connecting or Unreachable so status stays Stale.
         assert_eq!(s.status(), ServerStatus::Stale);
+    }
+    #[test]
+    fn independent_freshness_failure_and_recovery() {
+        let now = Instant::now();
+        let mut server = ServerState::new("synthetic".into(), 0);
+        server.apply_ntp(sample_ntp(), now);
+        server.apply_clock(Some(ClockSample {
+            epoch_ns: 0,
+            midpoint: now,
+            received_at: now,
+            rtt: Duration::ZERO,
+        }));
+        let boundary = now + TIMING_FRESHNESS;
+        assert!(server.timing_offset(boundary).is_some());
+        assert!(server
+            .timing_offset(boundary + Duration::from_nanos(1))
+            .is_none());
+        server.apply_gps(sample_gps());
+        assert!(server
+            .timing_offset(boundary + Duration::from_nanos(1))
+            .is_none());
+        server.apply_clock(None);
+        assert!(server.clock().is_none());
+        assert!(server.timing_offset(now).is_some());
+        server.apply_clock(Some(ClockSample {
+            epoch_ns: 0,
+            midpoint: boundary,
+            received_at: boundary,
+            rtt: Duration::ZERO,
+        }));
+        assert!(is_fresh(
+            server.status(),
+            server.clock().map(|s| s.received_at),
+            boundary + Duration::from_secs(1)
+        ));
+        assert!(server
+            .timing_offset(boundary + Duration::from_secs(1))
+            .is_none());
+        for status in [
+            ServerStatus::Connecting,
+            ServerStatus::Unreachable,
+            ServerStatus::Stale,
+        ] {
+            server.set_status(status);
+            assert!(server.timing_offset(now).is_none());
+            assert!(!is_fresh(status, Some(now), now));
+        }
+        server.set_status(ServerStatus::Unreachable);
+        server.apply_ntp(sample_ntp(), boundary);
+        assert!(server.timing_offset(boundary).is_some());
+        let mut ntpq = sample_ntp();
+        ntpq.provenance = NtpProvenance::NtpqPeer;
+        server.apply_ntp(ntpq, now);
+        assert!(server.timing_offset(now).is_none());
+        for value in [None, Some(f64::NAN), Some(f64::INFINITY)] {
+            let mut sample = sample_ntp();
+            sample.offset_sec = value;
+            server.apply_ntp(sample, now);
+            assert!(server.timing_offset(now).is_none());
+        }
     }
 }

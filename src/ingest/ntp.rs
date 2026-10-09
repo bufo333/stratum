@@ -10,13 +10,13 @@
 //! logic or the fixture strings is left as `None`.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use openssh::Session;
 use tokio::sync::mpsc;
 
-use crate::model::{NtpSample, NtpSource, ServerUpdate};
+use crate::model::{ClockSample, NtpProvenance, NtpSample, NtpSource, ServerUpdate};
 
 /// Run the NTP polling loop for one server.
 ///
@@ -31,22 +31,41 @@ pub async fn run_ntp_loop(
     tx: mpsc::Sender<ServerUpdate>,
 ) -> Result<()> {
     loop {
-        match collect_ntp(hostname, session).await {
-            Ok(sample) => {
-                if tx
-                    .send(ServerUpdate::NtpSample { index, sample })
-                    .await
-                    .is_err()
-                {
-                    return Ok(()); // channel closed — shutdown
-                }
-            }
-            Err(e) => {
-                return Err(e.context(format!("NTP collection from {hostname}")));
+        tokio::select! {
+            _ = tx.closed() => return Ok(()),
+            result = publish_poll(index, &tx, collect_ntp(hostname, session), super::clock::capture(session)) => {
+                result.with_context(|| format!("NTP collection from {hostname}"))?;
             }
         }
         tokio::time::sleep(interval).await;
     }
+}
+
+/// Each joined future publishes before waiting for its sibling.
+async fn publish_poll(
+    index: usize,
+    tx: &mpsc::Sender<ServerUpdate>,
+    ntp: impl std::future::Future<Output = Result<NtpSample>>,
+    clock: impl std::future::Future<Output = Option<ClockSample>>,
+) -> Result<()> {
+    let ntp = async {
+        let sample = ntp.await?;
+        let received_at = Instant::now();
+        let _ = tx
+            .send(ServerUpdate::NtpSample {
+                index,
+                sample,
+                received_at,
+            })
+            .await;
+        Ok(())
+    };
+    let clock = async {
+        let sample = clock.await;
+        let _ = tx.send(ServerUpdate::ClockResult { index, sample }).await;
+    };
+    let (result, ()) = tokio::join!(ntp, clock);
+    result
 }
 
 /// Collect one NTP sample from `hostname` via SSH.
@@ -142,6 +161,7 @@ pub fn parse_chronyc_csv_tracking(input: &str) -> Result<NtpSample> {
     });
 
     Ok(NtpSample {
+        provenance: NtpProvenance::ChronyTracking,
         offset_sec,
         rms_offset_sec,
         freq_ppm,
@@ -313,6 +333,7 @@ pub fn parse_chronyc_tracking(input: &str) -> Result<NtpSample> {
     }
 
     Ok(NtpSample {
+        provenance: NtpProvenance::ChronyTracking,
         offset_sec,
         rms_offset_sec,
         freq_ppm,
@@ -471,6 +492,7 @@ pub fn parse_ntpq_p(input: &str) -> Result<NtpSample> {
     }
 
     Ok(NtpSample {
+        provenance: NtpProvenance::NtpqPeer,
         offset_sec: selected_offset,
         rms_offset_sec: None,
         freq_ppm: None,
@@ -629,5 +651,106 @@ MS Name/IP address         Stratum Poll Reach LastRx Last sample
     fn chrony_time_offset_nanoseconds() {
         let v = super::parse_chrony_time_offset("+500ns").unwrap();
         assert!((v - 5e-7).abs() < 1e-12);
+    }
+    #[test]
+    fn provenance_and_negative_last_offsets() {
+        let csv = parse_chronyc_csv_tracking(
+            &CHRONYC_CSV_TRACKING.replace("+0.000000123", "-0.000000123"),
+        )
+        .unwrap();
+        let text = parse_chronyc_tracking(
+            &CHRONYC_TRACKING_VERBOSE.replace("+0.000000123", "-0.000000123"),
+        )
+        .unwrap();
+        for sample in [csv, text] {
+            assert_eq!(sample.provenance, NtpProvenance::ChronyTracking);
+            assert_eq!(sample.offset_sec, Some(-0.000000123));
+        }
+        assert_eq!(
+            parse_ntpq_p(NTPQ_P).unwrap().provenance,
+            NtpProvenance::NtpqPeer
+        );
+    }
+
+    #[tokio::test]
+    async fn publication_does_not_wait_for_sibling() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let (release, blocked) = tokio::sync::oneshot::channel::<()>();
+        let poll = publish_poll(
+            0,
+            &tx,
+            async { Ok(parse_chronyc_csv_tracking(CHRONYC_CSV_TRACKING).unwrap()) },
+            async {
+                let _ = blocked.await;
+                None
+            },
+        );
+        tokio::pin!(poll);
+        tokio::select! {
+            _ = &mut poll => panic!("clock should still be pending"),
+            update = rx.recv() => assert!(matches!(update, Some(ServerUpdate::NtpSample { .. }))),
+        }
+        release.send(()).unwrap();
+        poll.await.unwrap();
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerUpdate::ClockResult { sample: None, .. })
+        ));
+
+        let (release, blocked) = tokio::sync::oneshot::channel::<()>();
+        let now = Instant::now();
+        let poll = publish_poll(
+            0,
+            &tx,
+            async {
+                let _ = blocked.await;
+                Ok(parse_chronyc_csv_tracking(CHRONYC_CSV_TRACKING).unwrap())
+            },
+            async {
+                Some(ClockSample {
+                    epoch_ns: 0,
+                    midpoint: now,
+                    received_at: now,
+                    rtt: Duration::ZERO,
+                })
+            },
+        );
+        tokio::pin!(poll);
+        tokio::select! {
+            _ = &mut poll => panic!("ntp should still be pending"),
+            update = rx.recv() => assert!(matches!(update, Some(ServerUpdate::ClockResult { sample: Some(_), .. }))),
+        }
+        release.send(()).unwrap();
+        poll.await.unwrap();
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerUpdate::NtpSample { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn synthetic_clock_timeout_keeps_ntp() {
+        let (tx, mut rx) = mpsc::channel(4);
+        publish_poll(
+            0,
+            &tx,
+            async { Ok(parse_chronyc_csv_tracking(CHRONYC_CSV_TRACKING).unwrap()) },
+            async {
+                tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+                    .await
+                    .ok()?;
+                None
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerUpdate::NtpSample { .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(ServerUpdate::ClockResult { sample: None, .. })
+        ));
     }
 }

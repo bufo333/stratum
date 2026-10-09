@@ -3,7 +3,7 @@
 ## Overview
 
 trmnlapp is a read-only TUI monitoring application. It collects diagnostics from
-up to three LAN servers over SSH and displays NTP/chrony timing statistics and
+up to six LAN servers over SSH and displays NTP/chrony timing statistics and
 gpsd satellite/GPS data in a terminal UI. The architecture separates collection,
 state, view composition, and orchestration into distinct concerns with enforced
 boundaries.
@@ -16,7 +16,7 @@ owns lifecycle and I/O coordination.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  LAN servers (up to 3): chrony + gpsd                           │
+│  LAN servers (up to 6): chrony + gpsd                           │
 └────────────────────────┬────────────────────────────────────────┘
                          │ read-only diagnostics
                          │ (SSH preferred; mechanism is a planning decision)
@@ -104,8 +104,8 @@ both "widgets only / no I/O" and responsible for the terminal/event loop.
 
 - Entry point: `main.rs`, optionally delegating to a `src/app.rs` module
   (planning decision).
-- Parses CLI positional arguments (server hostnames/IPs, one to three; zero or
-  more than three is a usage error).
+- Parses CLI positional arguments (server hostnames/IPs, one to six; zero or
+  more than six is a usage error).
 - Sets up the tokio multi-thread runtime.
 - Spawns and manages per-server ingest tasks.
 - Consumes update messages from ingest and applies model transitions.
@@ -142,6 +142,24 @@ structural changes.
 
 `src/ui/` is an equally valid alternative to `src/render/`. The planner chooses
 one and records it in the approved plan.
+
+## Approved Timing View Ownership (Plan 012)
+
+- `src/ingest/clock.rs` detects optional `date +%s.%N` support over the existing
+  SSH session, validates integer epoch nanoseconds and normalizes capture midpoint,
+  receipt time and RTT. The query has a two-second timeout.
+- `src/ingest/ntp.rs` joins clock and NTP collection within each existing poll;
+  each publishes immediately on completion. Clock failure is optional; NTP
+  failure retains the existing reconnect behavior. No extra session or detached
+  clock task is introduced.
+- `src/model/server.rs` owns the latest optional capture and NTP provenance and
+  receipt timestamp. Pure projection/freshness helpers receive explicit monotonic
+  time; model and widgets never acquire clocks themselves.
+- `src/render/mod.rs` owns dashboard composition and Timing/Dashboard dispatch,
+  including the controls footer. `src/render/clocks.rs` reads model snapshots
+  for responsive cards, segmented UTC digits, sweep, offset and light equivalent.
+- `src/app.rs` owns view selection/Tab input and obtains one monotonic timestamp
+  per draw. It delegates widget composition to the render entry point.
 
 ## Concurrency Model (Planning Decisions)
 

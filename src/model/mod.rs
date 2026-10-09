@@ -2,7 +2,8 @@ pub mod ring_buffer;
 pub mod server;
 
 pub use server::{
-    GpsSample, NtpSample, NtpSource, SatelliteInfo, ServerState, ServerStatus, ServerUpdate,
+    ClockSample, GpsSample, NtpProvenance, NtpSample, NtpSource, SatelliteInfo, ServerState,
+    ServerStatus, ServerUpdate,
 };
 
 /// Application-wide model.
@@ -28,9 +29,18 @@ impl Model {
     /// Apply a `ServerUpdate` message produced by an ingest task.
     pub fn apply(&mut self, update: ServerUpdate) {
         match update {
-            ServerUpdate::NtpSample { index, sample } => {
+            ServerUpdate::NtpSample {
+                index,
+                sample,
+                received_at,
+            } => {
                 if let Some(s) = self.servers.get_mut(index) {
-                    s.apply_ntp(sample);
+                    s.apply_ntp(sample, received_at);
+                }
+            }
+            ServerUpdate::ClockResult { index, sample } => {
+                if let Some(s) = self.servers.get_mut(index) {
+                    s.apply_clock(sample);
                 }
             }
             ServerUpdate::GpsSample { index, sample } => {
@@ -106,6 +116,7 @@ mod tests {
             status: ServerStatus::Ok,
         });
         let sample = NtpSample {
+            provenance: NtpProvenance::ChronyTracking,
             offset_sec: Some(0.000123),
             rms_offset_sec: Some(0.000045),
             freq_ppm: Some(-5.2),
@@ -116,7 +127,11 @@ mod tests {
             leap_status: Some("Normal".into()),
             sources: vec![],
         };
-        m.apply(ServerUpdate::NtpSample { index: 0, sample });
+        m.apply(ServerUpdate::NtpSample {
+            index: 0,
+            sample,
+            received_at: std::time::Instant::now(),
+        });
         let server = m.server(0).unwrap();
         assert_eq!(server.ntp_history().len(), 1);
     }
